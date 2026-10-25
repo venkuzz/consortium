@@ -86,6 +86,7 @@ def _health_payload() -> dict:
         "project_state": proj.state if proj else None,
         "workers_online": STORE.workers_online(),
         "sse_clients": HUB.count(),
+        "lan_url": f"http://{_lan_ip()}:{int(os.getenv('PORT', '8000'))}",
     }
 
 # ── route table: (method, compiled_path_regex) -> handler(store, body, params)
@@ -206,6 +207,8 @@ class Handler(BaseHTTPRequestHandler):
         handler, params = self._match("POST")
         if not handler:
             return self._send(404, {"error": "not found"})
+        if params is not None:
+            params.update(self._query())
         body = self._read_json()
         try:
             code, resp = handler(STORE, body, params or {})

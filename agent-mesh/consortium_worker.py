@@ -216,6 +216,16 @@ def dep_outputs(client, task):
             for d in deps if d in by_id and by_id[d].get("result")]
 
 
+def claim_dep_outputs(client, claim):
+    """Use dependency results bundled with /next; support older servers too."""
+    bundled = claim.get("dependency_outputs")
+    if isinstance(bundled, list):
+        return [(item.get("title", item.get("task_id", "dependency")),
+                 item.get("output", ""))
+                for item in bundled if isinstance(item, dict) and item.get("output")]
+    return dep_outputs(client, claim.get("task") or {})
+
+
 # ───────────────────────── loop ─────────────────────────
 class Heartbeat(threading.Thread):
     def __init__(self, client, wid):
@@ -272,7 +282,7 @@ def run_loop(client, args, log):
                 continue
 
             log(f"-> task #{task.get('seq', '?')} {task.get('title', task['id'])}")
-            result = execute(args.provider, task, r.get("project"), dep_outputs(client, task),
+            result = execute(args.provider, task, r.get("project"), claim_dep_outputs(client, r),
                              args.api_key, args.model, args.base_url, args.cli_cmd)
             try:
                 client.submit(wid, task["id"], result)

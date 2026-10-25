@@ -166,14 +166,19 @@ $('assign-btn').addEventListener('click', async () => {
   catch {}
 });
 function shellQuote(s) { return `"${String(s).replace(/(["\\$`])/g, '\\$1')}"`; }
+async function workerServerAddress() {
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) return location.origin;
+  try { return (await request('/api/health')).lan_url || location.origin; }
+  catch { return location.origin; }
+}
 // One pasted command: download the single-file worker from THIS server, then
 // boot it so the teammate's CLI agent starts pulling and submitting tasks.
 // No repo clone, no separate download step.
-function cliCommandFor(workerId, owner, cliCmd, os) {
-  const server = location.origin;
+function cliCommandFor(server, workerId, owner, cliCmd, os, roomCode = '') {
   const dl = server.replace(/\/$/, '') + '/worker';
   const common = `--server ${shellQuote(server)} --owner ${shellQuote(owner)} ` +
-    `--provider cli --cli-cmd ${shellQuote(cliCmd)} --worker-id ${shellQuote(workerId)}`;
+    `--provider cli --cli-cmd ${shellQuote(cliCmd)} --worker-id ${shellQuote(workerId)} ` +
+    `--long-poll 20` + (roomCode ? ` --room-code ${shellQuote(roomCode)}` : '');
   if (os === 'bash') {
     // macOS / Linux: fetch to a temp file and exec it.
     return `curl -fsSL ${shellQuote(dl)} -o /tmp/consortium_worker.py && ` +
@@ -207,8 +212,10 @@ $('cli-form').addEventListener('submit', async event => {
     await request(`/api/tasks/${encodeURIComponent(task.id)}/assign`, { worker_id: wid });
     await sync();
     // 3. Show the one-paste command for the teammate to run (both OSes).
-    const winCmd = cliCommandFor(wid, owner, cliCmd, 'powershell');
-    const nixCmd = cliCommandFor(wid, owner, cliCmd, 'bash');
+    const server = await workerServerAddress();
+    const roomCode = $('room-code').value.trim();
+    const winCmd = cliCommandFor(server, wid, owner, cliCmd, 'powershell', roomCode);
+    const nixCmd = cliCommandFor(server, wid, owner, cliCmd, 'bash', roomCode);
     $('cli-generated').value =
       `# Windows (PowerShell):\n${winCmd}\n\n# macOS / Linux:\n${nixCmd}`;
     $('cli-command-box').hidden = false;
@@ -225,12 +232,12 @@ $('take-task').addEventListener('click', async () => {
   } catch {}
 });
 $('preview-output').addEventListener('click', () => { const frame = $('output-frame'); frame.hidden = !frame.hidden; if (!frame.hidden) frame.srcdoc = selectedTask()?.result || ''; });
-$('invite').addEventListener('click', () => { $('invite-address').value = location.origin + location.pathname; $('invite-help').textContent = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) ? 'For another laptop, replace localhost with the host’s LAN IP, keeping the port. Both devices must be on the same network. Use the backend server address, not the standalone demo.' : 'Share this address with teammates on the host’s network. The prototype uses a shared room without sign-in.'; $('invite-dialog').showModal(); });
+$('invite').addEventListener('click', async () => { $('invite-address').value = await workerServerAddress(); $('invite-help').textContent = 'Share this backend address with teammates. They must be on the same network unless you are using a public tunnel.'; $('invite-dialog').showModal(); });
 $('copy-address').addEventListener('click', () => copy($('invite-address').value));
 function connectStream() {
   stream = new EventSource('/api/events');
   stream.addEventListener('snapshot', event => { try { const data = JSON.parse(event.data); state.project = data.project; state.tasks = data.tasks || []; state.workers = data.workers || []; connection(true); render(); } catch { connection(false); } });
-  const descriptions = { project_state: 'Project state changed.', tasks_planned: 'Lead AI planned tasks.', task_created: 'New task added.', task_claimed: 'A worker claimed a task.', task_submitted: 'A result is ready for review.', task_reviewed: 'Task review updated.', worker_joined: 'A worker joined.', worker_left: 'A worker left.', done: 'Project complete.' };
+  const descriptions = { project_state: 'Project state changed.', tasks_planned: 'Lead AI planned tasks.', task_created: 'New task added.', task_claimed: 'A worker claimed a task.', task_submitted: 'A result is ready for review.', task_reviewed: 'Task review updated.', worker_joined: 'A worker joined.', worker_offline: 'A worker went offline; its task was requeued.', worker_left: 'A worker left.', done: 'Project complete.' };
   for (const [name, description] of Object.entries(descriptions)) stream.addEventListener(name, () => { log(description); sync(); });
   stream.onerror = () => { connection(false); renderControls(); }; // EventSource reconnects and replays a fresh snapshot.
 }
@@ -256,7 +263,7 @@ async function runAutomaticWorker(generation, config) {
       log(`Automatic worker claimed: ${claim.task.title}`);
       const started = performance.now();
       let output = '', ok = true, error = '';
-      try { output = await executeProviderTask(config, claim.task, claim.project || state.project); }
+      try { output = await executeProviderTask(config, claim.task, claim.project || state.project, claim.dependency_outputs || []); }
       catch (providerError) { ok = false; error = String(providerError.message || providerError).slice(0, 500); output = `[worker error from ${config.provider}] ${error}`; }
       if (generation !== workerGeneration || !automaticWorker) break;
       await request(`/api/worker/${encodeURIComponent(config.id)}/submit`, { task_id: claim.task.id, output, ok, error, elapsed: +((performance.now() - started) / 1000).toFixed(2) });
@@ -269,13 +276,14 @@ async function runAutomaticWorker(generation, config) {
   }
   if (generation === workerGeneration) { automaticWorker = null; renderControls(); }
 }
-async function executeProviderTask(config, task, project) {
+async function executeProviderTask(config, task, project, dependencyOutputs = []) {
   if (config.provider === 'mock') {
     await sleep(900 + Math.random() * 900);
     return `<!-- ${task.title} · generated by the browser mock worker -->\n<section data-task="${task.id}">\n  <p>Deliverable for: ${project?.goal || 'Consortium project'}</p>\n  <p>${task.instruction.slice(0, 240)}</p>\n</section>`;
   }
   const system = 'You are a worker AI on a collaborative build team. Produce only the deliverable requested by the instruction, without a preamble.';
-  const user = `Project goal: ${project?.goal || ''}\nTask: ${task.title}\nInstruction:\n${task.instruction}`;
+  const dependencies = dependencyOutputs.map(dep => `\n--- Output of dependency "${dep.title || dep.task_id}" ---\n${dep.output || ''}`).join('');
+  const user = `Project goal: ${project?.goal || ''}${project?.summary ? `\nProgress so far: ${project.summary}` : ''}${dependencies}\nTask: ${task.title}\nInstruction:\n${task.instruction}`;
   if (config.provider === 'anthropic') {
     const response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'x-api-key': config.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' }, body: JSON.stringify({ model: config.model || DEFAULT_MODEL.anthropic, max_tokens: 4096, system, messages: [{ role: 'user', content: user }] }), signal: AbortSignal.timeout(180000) });
     if (!response.ok) throw new Error(`Anthropic returned ${response.status}: ${(await response.text()).slice(0, 180)}`);

@@ -99,6 +99,20 @@ def dependency_outputs(client: ConsortiumClient, task: dict) -> list[tuple[str, 
             for d in deps if d in by_id and by_id[d].get("result")]
 
 
+def claim_dependency_outputs(client: ConsortiumClient, claim: dict) -> list[tuple[str, str]]:
+    """Prefer dependency results bundled atomically with /next.
+
+    Falling back to GET /api/tasks keeps this client compatible with older
+    Consortium servers.
+    """
+    bundled = claim.get("dependency_outputs")
+    if isinstance(bundled, list):
+        return [(item.get("title", item.get("task_id", "dependency")),
+                 item.get("output", ""))
+                for item in bundled if isinstance(item, dict) and item.get("output")]
+    return dependency_outputs(client, claim.get("task") or {})
+
+
 class Heartbeat(threading.Thread):
     """Keeps last_seen fresh while a long AI call is running."""
 
@@ -176,7 +190,7 @@ def run_loop(client: ConsortiumClient, owner: str, provider: str, api_key=None, 
 
             log(f"-> task #{task.get('seq', '?')} {task.get('title', task['id'])}")
             result = run_worker(provider, task, r.get("project"),
-                                dependency_outputs(client, task), api_key, model,
+                                claim_dependency_outputs(client, r), api_key, model,
                                 base_url, cli_cmd)
             try:
                 client.submit(wid, task["id"], result)

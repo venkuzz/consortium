@@ -125,7 +125,8 @@ def review_task(store, body, params):
             followup_instruction=body.get("followup_instruction"),
         )
     except ValueError as e:
-        return 404, {"error": str(e)}
+        message = str(e)
+        return (404 if message == "unknown task" else 409), {"error": message}
     # Refresh rolling summary after a review.
     all_tasks = [t.to_dict() for t in store.list_tasks()]
     proj = store.get_project()

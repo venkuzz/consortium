@@ -7,6 +7,7 @@ optional room_code gating live here.
 from __future__ import annotations
 
 import os
+import time
 
 from core.store import PROVIDER_LABELS
 
@@ -46,10 +47,23 @@ def heartbeat(store, body, params):
 
 # POST /api/worker/{id}/next
 def next_task(store, body, params):
-    result = store.claim_next(params.get("id"))
-    if result.get("error"):
-        return 404, result
-    return 200, result
+    try:
+        wait = max(0.0, min(float(params.get("wait", 0) or 0), 30.0))
+    except (TypeError, ValueError):
+        wait = 0.0
+    deadline = time.monotonic() + wait
+    while True:
+        result = store.claim_next(params.get("id"))
+        if result.get("error"):
+            return 404, result
+        if result.get("task") or result.get("stop") or not result.get("wait"):
+            return 200, result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return 200, result
+        # ThreadingHTTPServer gives each worker its own request thread. A short
+        # sleep keeps this stdlib implementation responsive without hot-looping.
+        time.sleep(min(0.25, remaining))
 
 
 # POST /api/worker/{id}/submit  {task_id, output, ok?, error?, elapsed?}

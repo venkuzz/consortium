@@ -135,9 +135,11 @@ class Store:
         return task
 
     def assign_task(self, task_id: str, worker_id: Optional[str]) -> Task:
-        """Leader pins (or unpins) a QUEUED task to a specific worker. The pinned
-        worker will receive it on its next pull, ahead of unpinned tasks; other
-        workers will skip it. Passing worker_id=None clears the pin."""
+        """Pin a queued task, or retry a rejected task, for a worker.
+
+        A rejected task must return to QUEUED before a worker can claim it. Its
+        previous result/review are cleared so the UI cannot mistake the old
+        attempt for the new one. Passing worker_id=None clears the pin."""
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -146,6 +148,11 @@ class Store:
                 raise ValueError(f"can only assign a queued task (this is {task.state})")
             if worker_id is not None and worker_id not in self._workers:
                 raise ValueError("unknown worker")
+            if task.state == REJECTED:
+                task.state = QUEUED
+                task.assigned_to = None
+                task.result = ""
+                task.review_note = ""
             task.assignee = worker_id
             task.updated_at = now()
             snap = task.to_dict()
@@ -343,10 +350,20 @@ class Store:
             w.current_task_id = candidate.id
             task_snap = candidate.to_dict()
             proj_snap = self._project.to_dict()
+            dependency_outputs = []
+            for dep_id in candidate.depends_on:
+                dep = self._tasks.get(dep_id)
+                if dep and dep.state == ACCEPTED:
+                    dependency_outputs.append({
+                        "task_id": dep.id,
+                        "title": dep.title,
+                        "output": dep.result,
+                    })
 
         self._broadcast("task_claimed",
                         {"task_id": task_snap["id"], "worker_id": worker_id})
-        return {"task": task_snap, "project": proj_snap}
+        return {"task": task_snap, "project": proj_snap,
+                "dependency_outputs": dependency_outputs}
 
     def submit(self, worker_id: str, task_id: str, output: str,
                ok: bool = True, error: str = "", elapsed: float = 0.0) -> Task:
@@ -380,6 +397,8 @@ class Store:
             task = self._tasks.get(task_id)
             if not task:
                 raise ValueError("unknown task")
+            if task.state != SUBMITTED:
+                raise ValueError(f"can only review a submitted task (this is {task.state})")
             task.state = decision
             task.review_note = note
             task.updated_at = now()
@@ -432,8 +451,9 @@ class Store:
         for w in self._workers.values():
             if w.status != OFFLINE and w.last_seen < cutoff:
                 w.status = OFFLINE
+                requeued = None
                 if w.current_task_id:
-                    self._requeue_task_locked(w.current_task_id)
+                    requeued = self._requeue_task_locked(w.current_task_id)
                     w.current_task_id = None
                 # Release any pins to this offline worker so the work isn't
                 # stranded — another worker can then pull those tasks.
@@ -441,6 +461,12 @@ class Store:
                     if t.assignee == w.id and t.state == QUEUED:
                         t.assignee = None
                         t.updated_at = now()
+                # SSEHub.broadcast is non-blocking. Emit while the state lock is
+                # held so every event describes the exact completed sweep.
+                self._broadcast("worker_offline", {"worker_id": w.id})
+                if requeued:
+                    self._broadcast("task_created",
+                                    {"task": self._tasks[requeued].to_dict()})
 
     # ── aggregate view ─────────────────────────────────────────────────────
     def stats(self) -> dict:
