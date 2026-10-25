@@ -7,6 +7,7 @@ submit and the lead can reject/requeue. Providers: anthropic | openai | kimi | m
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from typing import Optional
@@ -17,6 +18,13 @@ from lead import prompts  # noqa: E402
 from lead.lead_ai import PROVIDERS, complete  # noqa: E402
 
 MOCK_DELAY = float(os.getenv("MOCK_DELAY", "1.0"))
+_FENCE = re.compile(r"^```[\w+-]*[ \t]*\n(.*?)\n?```$", re.DOTALL)
+
+
+def strip_fence(text: str) -> str:
+    """LLMs often wrap the whole deliverable in ```html ... ```; unwrap one outer fence."""
+    m = _FENCE.match(text.strip())
+    return m.group(1).strip() if m else text
 
 
 def _mock_output(title: str, instruction: str) -> str:
@@ -62,7 +70,8 @@ def run_worker(provider: str, task: dict, project: Optional[dict] = None,
             project = project or {}
             user = prompts.worker_user(project.get("goal", ""), project.get("summary", ""),
                                        title, instruction, dependency_outputs or [])
-            out = complete(provider, prompts.WORKER_SYSTEM, user, api_key, model, max_tokens=8000)
+            out = strip_fence(complete(provider, prompts.WORKER_SYSTEM, user, api_key, model,
+                                       max_tokens=8000))
         return {"ok": True, "output": out, "error": "", "elapsed": round(time.time() - start, 2)}
     except Exception as e:  # graceful per-worker failure
         return {"ok": False, "output": "", "error": str(e)[:500],
