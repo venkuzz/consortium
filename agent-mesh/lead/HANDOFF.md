@@ -13,16 +13,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lead import orchestrator, lead_ai
 ```
 
-## Two changes needed in `core/store.py`
+## Changes requested in `core/store.py` (both resolved)
 
-1. **`plan()` depends_on values are 0-based indexes**, not task ids, because no ids
+1. ✅ *Resolved in a79ed22.* **`plan()` depends_on values are 0-based indexes**, not task ids, because no ids
    exist yet when the plan is made. `add_tasks_bulk` currently copies them through
    as-is. Map them inside the loop, for example:
    ```python
    deps = [created[d].id if isinstance(d, int) and 0 <= d < len(created) else d
            for d in spec.get("depends_on") or []]
    ```
-2. **STILL OPEN (checked 14:10 on 7f387af): a rejected task blocks its dependents
+2. ✅ *Resolved in b523a1b.* **A rejected task blocks its dependents
    forever.** `_deps_satisfied` requires ACCEPTED, but after a rejection the work is
    redone in a new follow-up task. Repro on the real `Store`:
    plan A, then B with depends_on=[A]. Reject A with a follow-up (t_03), then accept t_03.
