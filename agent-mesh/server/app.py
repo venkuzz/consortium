@@ -98,6 +98,7 @@ _ROUTES = [
     ("GET",  r"^/api/tasks$",                    rp.list_tasks),
     ("POST", r"^/api/tasks$",                    rp.add_task),
     ("POST", r"^/api/tasks/(?P<id>[^/]+)/review$", rp.review_task),
+    ("POST", r"^/api/tasks/(?P<id>[^/]+)/assign$", rp.assign_task),
     ("POST", r"^/api/worker/register$",         rw.register),
     ("POST", r"^/api/worker/(?P<id>[^/]+)/heartbeat$", rw.heartbeat),
     ("POST", r"^/api/worker/(?P<id>[^/]+)/next$",      rw.next_task),

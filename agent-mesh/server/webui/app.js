@@ -73,8 +73,9 @@ function renderTasks() {
   for (const task of tasks) {
     const row = element('button', undefined, `task-row ${task.id === state.selected ? 'selected' : ''}`); row.setAttribute('aria-pressed', String(task.id === state.selected));
     const copy = element('span', undefined, 'task-copy'); copy.append(element('strong', task.title));
-    const worker = state.workers.find(w => w.id === task.assigned_to);
-    copy.append(element('small', `${labels[task.state] || task.state}${worker ? ` / ${worker.display}` : ''}`));
+    const worker = state.workers.find(w => w.id === (task.assigned_to || task.assignee));
+    const pinNote = task.assignee && !task.assigned_to && worker ? ` / → ${worker.display}` : worker ? ` / ${worker.display}` : '';
+    copy.append(element('small', `${labels[task.state] || task.state}${pinNote}`));
     row.append(element('span', symbols[task.state] || '○', `task-symbol ${task.state}`), copy, element('span', `#${String(task.seq).padStart(2, '0')}`, 'task-number'));
     row.addEventListener('click', () => { if (state.selected !== task.id) { $('review-note').value = ''; $('followup').value = ''; $('worker-output').value = ''; $('output-frame').hidden = true; $('output-frame').srcdoc = ''; } state.selected = task.id; renderTasks(); renderDetail(); }); $('task-list').append(row);
   }
@@ -82,7 +83,23 @@ function renderTasks() {
 function renderDetail() {
   const task = selectedTask(); $('detail-empty').hidden = !!task; $('task-detail').hidden = !task; if (!task) return;
   $('detail-state').textContent = labels[task.state] || task.state; $('detail-state').className = `state-chip ${task.state}`; $('detail-seq').textContent = `Task ${task.seq}`;
-  $('detail-title').textContent = task.title; $('detail-instruction').textContent = task.instruction; $('detail-worker').textContent = state.workers.find(w => w.id === task.assigned_to)?.display || 'Available to a worker';
+  $('detail-title').textContent = task.title; $('detail-instruction').textContent = task.instruction;
+  const pinned = task.assignee ? state.workers.find(w => w.id === task.assignee) : null;
+  const claimed = state.workers.find(w => w.id === task.assigned_to);
+  $('detail-worker').textContent = claimed ? claimed.display
+    : pinned ? `Assigned to ${pinned.display} (waiting to start)`
+    : 'Available to any worker';
+  // Leader can (re)assign a task that hasn't been claimed yet.
+  const assignable = ['queued', 'rejected'].includes(task.state) && state.workers.length && state.project && !['done'].includes(state.project.state);
+  $('assign-row').hidden = !assignable;
+  if (assignable) {
+    const sel = $('assign-select');
+    sel.replaceChildren();
+    sel.append(element('option', 'Anyone (open)', ''));
+    sel.lastChild.value = '';
+    for (const w of state.workers) { const o = element('option', `${w.display} (${w.status})`); o.value = w.id; sel.append(o); }
+    sel.value = task.assignee || '';
+  }
   $('detail-deps').textContent = task.depends_on?.length ? `Depends on: ${task.depends_on.map(id => state.tasks.find(t => t.id === id)?.title || id).join(', ')}` : '';
   $('output-section').hidden = !task.result; $('detail-output').textContent = task.result || ''; $('preview-output').hidden = !/<[a-z][\s\S]*>/i.test(task.result || '');
   $('review-note-section').hidden = !task.review_note; $('detail-review').textContent = task.review_note || '';
@@ -128,10 +145,17 @@ $('leave').addEventListener('click', async () => { const leavingWorker = workerI
 $('claim').addEventListener('click', async () => { try { const data = await mutate(`/api/worker/${encodeURIComponent(workerId)}/next`, {}); if (data?.task) { state.selected = data.task.id; $('worker-output').value = ''; render(); log(`Claimed: ${data.task.title}`); } else toast(data?.stop ? 'The project is paused or done.' : 'No eligible tasks yet. Waiting for reviews or new tasks.'); } catch {} });
 $('submit-form').addEventListener('submit', async event => { event.preventDefault(); const task = selectedTask(); if (!task || !$('worker-output').value.trim()) return; try { await mutate(`/api/worker/${encodeURIComponent(workerId)}/submit`, { task_id: task.id, output: $('worker-output').value, ok: true, error: '', elapsed: 0 }, `Submitted: ${task.title}`); $('worker-output').value = ''; } catch {} });
 $('review-form').addEventListener('submit', async event => { event.preventDefault(); const task = selectedTask(), decision = event.submitter?.value; if (!task || !['accepted', 'rejected'].includes(decision)) return; try { await mutate(`/api/tasks/${encodeURIComponent(task.id)}/review`, { decision, note: $('review-note').value.trim(), ...(decision === 'rejected' && $('followup').value.trim() ? { followup_instruction: $('followup').value.trim() } : {}) }, `${task.title}: ${decision}.`); $('review-note').value = ''; $('followup').value = ''; } catch {} });
-$('add-task').addEventListener('click', () => { $('dependencies').replaceChildren(); state.tasks.forEach(t => { const opt = element('option', t.title); opt.value = t.id; $('dependencies').append(opt); }); $('task-error').textContent = ''; $('task-dialog').showModal(); });
-$('task-form').addEventListener('submit', async event => { event.preventDefault(); const title = $('task-title').value.trim(), instruction = $('task-instruction').value.trim(); if (!title || !instruction) return; try { const data = await mutate('/api/tasks', { title, instruction, depends_on: [...$('dependencies').selectedOptions].map(o => o.value) }, `Task added: ${title}`); if (data) { $('task-dialog').close(); $('task-form').reset(); state.selected = data.task.id; render(); } } catch (error) { $('task-error').textContent = error.message; } });
+$('add-task').addEventListener('click', () => { $('dependencies').replaceChildren(); state.tasks.forEach(t => { const opt = element('option', t.title); opt.value = t.id; $('dependencies').append(opt); }); const asg = $('task-assignee'); asg.replaceChildren(); const anyone = element('option', 'Anyone (open)'); anyone.value = ''; asg.append(anyone); state.workers.forEach(w => { const o = element('option', `${w.display} (${w.status})`); o.value = w.id; asg.append(o); }); $('task-error').textContent = ''; $('task-dialog').showModal(); });
+$('task-form').addEventListener('submit', async event => { event.preventDefault(); const title = $('task-title').value.trim(), instruction = $('task-instruction').value.trim(); if (!title || !instruction) return; try { const data = await mutate('/api/tasks', { title, instruction, depends_on: [...$('dependencies').selectedOptions].map(o => o.value), assignee: $('task-assignee').value || '' }, `Task added: ${title}`); if (data) { $('task-dialog').close(); $('task-form').reset(); state.selected = data.task.id; render(); } } catch (error) { $('task-error').textContent = error.message; } });
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch { toast('Clipboard unavailable. Select the text and copy it manually.'); } }
 $('copy-instruction').addEventListener('click', () => copy(selectedTask()?.instruction || ''));
+$('assign-btn').addEventListener('click', async () => {
+  const task = selectedTask(); if (!task) return;
+  const worker_id = $('assign-select').value;
+  const name = worker_id ? (state.workers.find(w => w.id === worker_id)?.display || 'worker') : 'anyone';
+  try { await mutate(`/api/tasks/${encodeURIComponent(task.id)}/assign`, { worker_id }, `${task.title}: assigned to ${name}.`); }
+  catch {}
+});
 $('preview-output').addEventListener('click', () => { const frame = $('output-frame'); frame.hidden = !frame.hidden; if (!frame.hidden) frame.srcdoc = selectedTask()?.result || ''; });
 $('invite').addEventListener('click', () => { $('invite-address').value = location.origin + location.pathname; $('invite-help').textContent = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) ? 'For another laptop, replace localhost with the host’s LAN IP, keeping the port. Both devices must be on the same network. Use the backend server address, not the standalone demo.' : 'Share this address with teammates on the host’s network. The prototype uses a shared room without sign-in.'; $('invite-dialog').showModal(); });
 $('copy-address').addEventListener('click', () => copy($('invite-address').value));
@@ -197,18 +221,19 @@ async function executeProviderTask(config, task, project) {
   const data = await response.json();
   return (data.choices?.[0]?.message?.content || '').trim() || '[empty response]';
 }
-function newTask(title, instruction, depends_on = []) { return { id: `t_${crypto.randomUUID()}`, seq: state.tasks.length + 1, project_id: state.project.id, title, instruction, state: 'queued', assigned_to: null, depends_on, result: '', review_note: '' }; }
+function newTask(title, instruction, depends_on = [], assignee = null) { return { id: `t_${crypto.randomUUID()}`, seq: state.tasks.length + 1, project_id: state.project.id, title, instruction, state: 'queued', assigned_to: null, assignee, depends_on, result: '', review_note: '' }; }
 function sampleWorker(owner) { return { id: `w_${crypto.randomUUID()}`, owner, provider: 'mock', display: `${owner}'s Mock`, status: 'idle', last_seen: Date.now() / 1000 }; }
 async function demoRequest(path, body) {
   if (path === '/api/project' && body) { clearTimeout(sampleTimer); state.project = { id: 'sample-project', goal: body.goal, state: 'planning', summary: '' }; state.tasks = []; state.selected = null; state.workers.forEach(w => w.status = 'idle'); return { project: state.project }; }
   if (path === '/api/project/plan') { state.tasks = []; for (const [title, instruction] of [['Define the page structure', 'Create semantic HTML for a team-matching page with a hero, a team list, and a join form. Use #hero, #teams, and #join.'], ['Design the visual system', 'Provide CSS for #hero, #teams, and #join. Use a blue and white palette, readable typography, and a responsive layout.'], ['Check the complete experience', 'Check keyboard navigation, form labels, mobile layout, and readable contrast. Report any missing requirements.']]) state.tasks.push(newTask(title, instruction)); state.project.state = 'active'; return { project: state.project, tasks: state.tasks, used_llm: false, note: 'Sample tasks only. No model was called.' }; }
   if (path === '/api/project/state') { state.project.state = body.state; return { project: state.project }; }
-  if (path === '/api/tasks') { const task = newTask(body.title, body.instruction, body.depends_on); state.tasks.push(task); return { task }; }
+  if (path === '/api/tasks') { const task = newTask(body.title, body.instruction, body.depends_on, body.assignee || null); state.tasks.push(task); return { task }; }
+  if (path.endsWith('/assign')) { const task = state.tasks.find(t => path.includes(t.id)); if (task) { task.assignee = body.worker_id || null; } return { task }; }
   if (path.endsWith('/review')) { const task = state.tasks.find(t => path.includes(t.id)); task.state = body.decision; task.review_note = body.note; let followup = null; if (body.decision === 'rejected' && body.followup_instruction) { followup = newTask(`Revise: ${task.title}`, body.followup_instruction); state.tasks.push(followup); } return { task, followup }; }
   if (path === '/api/worker/register') { const worker = sampleWorker(body.owner); state.workers.push(worker); return { worker }; }
   const worker = state.workers.find(w => path.includes(w.id));
   if (path.endsWith('/unregister')) { state.workers = state.workers.filter(w => w !== worker); state.tasks.filter(t => t.assigned_to === worker?.id && t.state === 'assigned').forEach(t => { t.state = 'queued'; t.assigned_to = null; }); return { ok: true }; }
-  if (path.endsWith('/next')) { if (state.project?.state !== 'active') return { task: null, stop: true }; const task = state.tasks.find(t => t.state === 'queued' && t.depends_on.every(id => state.tasks.find(d => d.id === id)?.state === 'accepted')); if (task) { task.state = 'assigned'; task.assigned_to = worker.id; worker.status = 'working'; } return { task: task || null }; }
+  if (path.endsWith('/next')) { if (state.project?.state !== 'active') return { task: null, stop: true }; const eligible = state.tasks.filter(t => t.state === 'queued' && (!t.assignee || t.assignee === worker.id) && t.depends_on.every(id => state.tasks.find(d => d.id === id)?.state === 'accepted')); eligible.sort((a, b) => ((a.assignee === worker.id ? 0 : 1) - (b.assignee === worker.id ? 0 : 1)) || a.seq - b.seq); const task = eligible[0]; if (task) { task.state = 'assigned'; task.assigned_to = worker.id; worker.status = 'working'; } return { task: task || null }; }
   if (path.endsWith('/submit')) { const task = state.tasks.find(t => t.id === body.task_id); task.result = body.output; task.state = 'submitted'; worker.status = 'idle'; return { ok: true }; }
   throw new Error('Unsupported sample action.');
 }

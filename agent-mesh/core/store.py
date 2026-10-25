@@ -112,21 +112,44 @@ class Store:
 
     # ── tasks ───────────────────────────────────────────────────────────────
     def add_task(self, title: str, instruction: str,
-                 depends_on: Optional[list[str]] = None) -> Task:
+                 depends_on: Optional[list[str]] = None,
+                 assignee: Optional[str] = None) -> Task:
         with self._lock:
             if not self._project:
                 raise ValueError("no project")
+            # Only pin to a worker that actually exists; otherwise leave open.
+            if assignee and assignee not in self._workers:
+                assignee = None
             self._task_seq += 1
             tid = "t_%02d" % self._task_seq
             t = now()
             task = Task(
                 id=tid, project_id=self._project.id, seq=self._task_seq,
                 title=title, instruction=instruction, state=QUEUED,
+                assignee=assignee,
                 depends_on=list(depends_on or []), created_at=t, updated_at=t,
             )
             self._tasks[tid] = task
             snap = task.to_dict()
         self._broadcast("task_created", {"task": snap})
+        return task
+
+    def assign_task(self, task_id: str, worker_id: Optional[str]) -> Task:
+        """Leader pins (or unpins) a QUEUED task to a specific worker. The pinned
+        worker will receive it on its next pull, ahead of unpinned tasks; other
+        workers will skip it. Passing worker_id=None clears the pin."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                raise ValueError("unknown task")
+            if task.state not in (QUEUED, REJECTED):
+                raise ValueError(f"can only assign a queued task (this is {task.state})")
+            if worker_id is not None and worker_id not in self._workers:
+                raise ValueError("unknown worker")
+            task.assignee = worker_id
+            task.updated_at = now()
+            snap = task.to_dict()
+        self._broadcast("task_created", {"task": snap})  # UI re-renders the task
         return task
 
     def add_tasks_bulk(self, specs: list[dict]) -> list[Task]:
@@ -239,6 +262,11 @@ class Store:
             w = self._workers.pop(worker_id, None)
             if w and w.current_task_id:
                 requeued = self._requeue_task_locked(w.current_task_id)
+            # Release pins to the departing worker so those tasks go to others.
+            for t in self._tasks.values():
+                if t.assignee == worker_id and t.state == QUEUED:
+                    t.assignee = None
+                    t.updated_at = now()
         self._broadcast("worker_left", {"worker_id": worker_id})
         if requeued:
             self._broadcast("task_created",
@@ -268,23 +296,36 @@ class Store:
             if self._project.state != ACTIVE:
                 return {"task": None, "wait": True}
 
-            # Find the lowest-seq queued task whose deps are all accepted.
-            for task in sorted(self._tasks.values(), key=lambda t: t.seq):
+            # Eligible = queued, deps satisfied, and not pinned to someone else.
+            # Pinned-to-ME tasks win over unpinned ones; within each group the
+            # lowest seq goes first. This is how the leader "assigns" a task to
+            # a specific worker: it simply pins, and that worker pulls it next.
+            def _rank(t):
+                if t.assignee == worker_id:
+                    return (0, t.seq)   # my pinned tasks first
+                return (1, t.seq)       # then open tasks
+
+            candidate = None
+            for task in sorted(self._tasks.values(), key=_rank):
                 if task.state != QUEUED:
                     continue
+                if task.assignee and task.assignee != worker_id:
+                    continue  # pinned to a different worker — not for me
                 if not self._deps_satisfied(task):
                     continue
-                # Claim it.
-                task.state = ASSIGNED
-                task.assigned_to = worker_id
-                task.updated_at = now()
-                w.status = WORKING
-                w.current_task_id = task.id
-                task_snap = task.to_dict()
-                proj_snap = self._project.to_dict()
+                candidate = task
                 break
-            else:
+
+            if candidate is None:
                 return {"task": None, "wait": True}
+
+            candidate.state = ASSIGNED
+            candidate.assigned_to = worker_id
+            candidate.updated_at = now()
+            w.status = WORKING
+            w.current_task_id = candidate.id
+            task_snap = candidate.to_dict()
+            proj_snap = self._project.to_dict()
 
         self._broadcast("task_claimed",
                         {"task_id": task_snap["id"], "worker_id": worker_id})
@@ -377,6 +418,12 @@ class Store:
                 if w.current_task_id:
                     self._requeue_task_locked(w.current_task_id)
                     w.current_task_id = None
+                # Release any pins to this offline worker so the work isn't
+                # stranded — another worker can then pull those tasks.
+                for t in self._tasks.values():
+                    if t.assignee == w.id and t.state == QUEUED:
+                        t.assignee = None
+                        t.updated_at = now()
 
     # ── aggregate view ─────────────────────────────────────────────────────
     def stats(self) -> dict:
