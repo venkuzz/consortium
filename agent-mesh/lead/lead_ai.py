@@ -21,15 +21,20 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-PROVIDERS = ("anthropic", "openai", "kimi", "mock")
+PROVIDERS = ("anthropic", "openai", "kimi", "custom", "mock")
 
 DEFAULT_MODELS = {
     "anthropic": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
     "openai": os.getenv("OPENAI_MODEL", "gpt-4o"),
     "kimi": os.getenv("KIMI_MODEL", "moonshot-v1-8k"),
+    "custom": os.getenv("CUSTOM_MODEL", "gpt-3.5-turbo"),
 }
-KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "kimi": "KIMI_API_KEY"}
+KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+           "kimi": "KIMI_API_KEY", "custom": "CUSTOM_API_KEY"}
 KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1")
+# `custom` lets anyone bring a key for ANY OpenAI-compatible endpoint
+# (OpenRouter, Groq, Together, DeepSeek, Fireworks, local Ollama/LM Studio/vLLM…).
+CUSTOM_BASE_URL = os.getenv("CUSTOM_BASE_URL", "https://openrouter.ai/api/v1")
 TIMEOUT = float(os.getenv("LLM_TIMEOUT", "90"))
 
 
@@ -83,10 +88,13 @@ def resolve_key(provider: str, api_key: Optional[str] = None) -> Optional[str]:
 
 
 def complete(provider: str, system: str, user: str, api_key: Optional[str] = None,
-             model: Optional[str] = None, max_tokens: int = 4096) -> str:
+             model: Optional[str] = None, max_tokens: int = 4096,
+             base_url: Optional[str] = None) -> str:
     """One LLM call. Raises LLMError on any failure (callers decide how to degrade).
 
-    `mock` is not handled here — callers produce their own canned output."""
+    `mock` is not handled here — callers produce their own canned output.
+    `base_url` overrides the endpoint for OpenAI-compatible providers; it lets a
+    user bring a key for ANY compatible service via provider='custom'."""
     if provider not in KEY_ENV:
         raise LLMError(f"Provider {provider!r} has no LLM backend")
     key = resolve_key(provider, api_key)
@@ -96,9 +104,16 @@ def complete(provider: str, system: str, user: str, api_key: Optional[str] = Non
     if provider == "anthropic":
         text = _anthropic(system, user, key, model, max_tokens)
     elif provider == "openai":
-        text = _openai_compatible("https://api.openai.com/v1", system, user, key, model, max_tokens)
-    else:
-        text = _openai_compatible(KIMI_BASE_URL, system, user, key, model, max_tokens)
+        url = base_url or "https://api.openai.com/v1"
+        text = _openai_compatible(url, system, user, key, model, max_tokens)
+    elif provider == "kimi":
+        url = base_url or KIMI_BASE_URL
+        text = _openai_compatible(url, system, user, key, model, max_tokens)
+    else:  # custom — any OpenAI-compatible endpoint
+        url = base_url or CUSTOM_BASE_URL
+        if not url:
+            raise LLMError("custom provider needs a base_url (CUSTOM_BASE_URL)")
+        text = _openai_compatible(url, system, user, key, model, max_tokens)
     text = text.strip()
     if not text:
         raise LLMError(f"{provider} returned an empty response")
@@ -106,7 +121,7 @@ def complete(provider: str, system: str, user: str, api_key: Optional[str] = Non
 
 
 def _auto_provider() -> str:
-    for p in ("anthropic", "openai", "kimi"):
+    for p in ("anthropic", "openai", "kimi", "custom"):
         if os.getenv(KEY_ENV[p]):
             return p
     return "mock"
@@ -116,13 +131,14 @@ class LeadAI:
     """The leader's attached AI. `mock` (or no key) means: orchestrator uses templates."""
 
     def __init__(self, provider: Optional[str] = None, api_key: Optional[str] = None,
-                 model: Optional[str] = None):
+                 model: Optional[str] = None, base_url: Optional[str] = None):
         provider = provider or os.getenv("LEAD_PROVIDER") or _auto_provider()
         if provider not in PROVIDERS:
             raise ValueError(f"unknown provider {provider!r}; expected one of {PROVIDERS}")
         self.provider = provider
         self.api_key = api_key
         self.model = model or os.getenv("LEAD_MODEL") or None
+        self.base_url = base_url or os.getenv("LEAD_BASE_URL") or None
 
     @property
     def available(self) -> bool:
@@ -135,7 +151,8 @@ class LeadAI:
     def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
         if self.provider == "mock":
             raise LLMError("mock lead has no LLM")
-        return complete(self.provider, system, user, self.api_key, self.model, max_tokens)
+        return complete(self.provider, system, user, self.api_key, self.model,
+                        max_tokens, self.base_url)
 
 
 _lead: Optional[LeadAI] = None
@@ -149,8 +166,8 @@ def get_lead() -> LeadAI:
 
 
 def configure(provider: Optional[str] = None, api_key: Optional[str] = None,
-              model: Optional[str] = None) -> LeadAI:
+              model: Optional[str] = None, base_url: Optional[str] = None) -> LeadAI:
     """Let the server swap the Lead AI at runtime (e.g. leader picks it in the UI)."""
     global _lead
-    _lead = LeadAI(provider, api_key, model)
+    _lead = LeadAI(provider, api_key, model, base_url)
     return _lead

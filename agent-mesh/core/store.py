@@ -35,6 +35,7 @@ PROVIDER_LABELS = {
     "anthropic": "Claude",
     "openai": "Codex",
     "kimi": "Kimi",
+    "custom": "Custom AI",
     "mock": "Mock",
 }
 
