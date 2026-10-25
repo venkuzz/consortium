@@ -80,8 +80,13 @@
         <option value="anthropic">Claude · Anthropic</option>
         <option value="openai">Codex · OpenAI</option>
         <option value="kimi">Kimi · open model</option>
+        <option value="custom">Custom · any OpenAI-compatible</option>
         <option value="mock" selected>Mock · no key</option>
       </select></label>
+    <label class="field" id="w-custom-url-field" style="display:none"><span>Base URL <em>(custom)</em></span>
+      <input id="w-base-url" placeholder="https://openrouter.ai/api/v1" /></label>
+    <label class="field" id="w-model-field" style="display:none"><span>Model</span>
+      <input id="w-model" placeholder="e.g. meta-llama/llama-3.1-8b-instruct" /></label>
     <label class="field"><span>API key <em>(optional)</em></span>
       <input id="w-key" type="password" placeholder="stays between you and the host" /></label>
     <button id="btn-join" class="btn btn-primary full">Join the mesh ✦</button>
