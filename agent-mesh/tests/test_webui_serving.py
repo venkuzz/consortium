@@ -19,6 +19,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+os.environ.setdefault("CONSORTIUM_ALLOW_MOCK_WORK", "1")  # test drives a mock worker round-trip
 from http.server import ThreadingHTTPServer
 from server.app import Handler
 

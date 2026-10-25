@@ -96,7 +96,12 @@ python consortium_worker.py --server http://LEADER:8000 --owner Alice \
   --model provider/model --api-key sk-...
 ```
 
-Use `--provider mock` to test the workflow without an AI.
+Use `--provider mock` only to test wiring — Mock workers emit placeholder
+output and are **blocked from claiming real tasks** on the live server (so a
+stray Mock worker can't fill the queue with junk). Set
+`CONSORTIUM_ALLOW_MOCK_WORK=1` on the server to allow mock execution (e.g. a
+local demo/self-test). For real work use `--provider cli` (your own agent) or a
+provider key.
 
 ## Run a project
 

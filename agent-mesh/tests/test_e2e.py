@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+os.environ.setdefault("CONSORTIUM_ALLOW_MOCK_WORK", "1")  # e2e drives mock workers
 from core.store import Store
 from core.state import ACTIVE, DONE, ACCEPTED, QUEUED
 from server import routes_project as rp
