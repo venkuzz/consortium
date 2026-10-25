@@ -5,7 +5,7 @@ const state = { project: null, tasks: [], workers: [], filter: 'all', selected: 
 const symbols = { queued: '○', assigned: '◐', submitted: '◈', accepted: '✓', rejected: '×' };
 const labels = { queued: 'Queued', assigned: 'In progress', submitted: 'Needs review', accepted: 'Accepted', rejected: 'Changes requested' };
 const sessionKey = `consortium-worker:${demo ? 'demo' : location.origin}`;
-let workerId = null, stream, toastTimer, sampleTimer, refreshAgain = false, automaticWorker = null, workerGeneration = 0;
+let workerId = null, stream, toastTimer, sampleTimer, refreshAgain = false, automaticWorker = null, workerGeneration = 0, currentExport = null;
 try { workerId = demo ? null : sessionStorage.getItem(sessionKey); } catch {}
 function setWorker(id) { workerId = id; try { id ? sessionStorage.setItem(sessionKey, id) : sessionStorage.removeItem(sessionKey); } catch {} }
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6000); }
@@ -36,14 +36,15 @@ async function mutate(path, body, success) {
 function selectedTask() { return state.tasks.find(t => t.id === state.selected); }
 function renderControls() {
   const unavailable = state.busy || !state.connected, project = state.project;
-  for (const id of ['create', 'join', 'plan', 'pause', 'done', 'add-task', 'claim', 'leave', 'new-project', 'sample-run']) $(id).disabled = unavailable;
+  for (const id of ['create', 'join', 'plan', 'export', 'pause', 'done', 'add-task', 'claim', 'leave', 'new-project', 'sample-run']) $(id).disabled = unavailable;
   $('create').disabled = unavailable || !$('goal').value.trim();
   $('plan').textContent = state.busy ? 'Working…' : 'Plan tasks';
   $('add-task').disabled = unavailable || !project || project.state === 'done';
   $('claim').disabled = unavailable || !!automaticWorker || project?.state !== 'active' || state.tasks.some(t => t.assigned_to === workerId && t.state === 'assigned');
   $('claim').textContent = automaticWorker ? 'Automatic worker active' : 'Claim next task';
   $('sample-run').disabled = unavailable || project?.state !== 'active' || !state.tasks.some(t => t.state === 'queued');
-  $('new-project').hidden = !project; $('pause').hidden = !project || !['active', 'paused'].includes(project.state); $('done').hidden = !project || project.state === 'done';
+  const exportReady = state.tasks.some(t => t.state === 'accepted' && t.result?.trim());
+  $('new-project').hidden = !project; $('export').hidden = !project; $('export').disabled = unavailable || !exportReady; $('export').textContent = exportReady ? 'Export result' : 'Export after review'; $('export').title = exportReady ? 'Preview and download the final accepted result' : 'Accept a task result to enable export'; $('pause').hidden = !project || !['active', 'paused'].includes(project.state); $('done').hidden = !project || project.state === 'done';
   $('pause').textContent = project?.state === 'paused' ? 'Resume' : 'Pause';
   document.querySelectorAll('dialog button[type="submit"], #review-form button, #submit-form button').forEach(b => b.disabled = unavailable);
 }
@@ -128,6 +129,38 @@ $('plan').addEventListener('click', async () => {
 $('lead-provider')?.addEventListener('change', () => { const show = $('lead-provider').value === 'custom'; if ($('lead-base-url')) $('lead-base-url').hidden = !show; });
 $('pause').addEventListener('click', async () => { const next = state.project?.state === 'paused' ? 'active' : 'paused'; try { await mutate('/api/project/state', { state: next }, `Project ${next === 'active' ? 'resumed' : 'paused'}.`); } catch {} });
 $('done').addEventListener('click', async () => { if (!confirm('Mark this project done? Workers will stop claiming tasks. This cannot be resumed.')) return; try { await mutate('/api/project/state', { state: 'done' }, 'Project marked done.'); } catch {} });
+$('export').addEventListener('click', async () => {
+  $('export-error').textContent = ''; $('export-preview').hidden = true; $('export-preview').srcdoc = '';
+  $('export-preview-toggle').textContent = 'Preview';
+  try {
+    currentExport = await request('/api/project/export?format=artifact');
+    $('export-filename').textContent = currentExport.filename;
+    $('export-source').textContent = `Selected from task ${currentExport.source_task.seq}: ${currentExport.source_task.title}`;
+    const extension = currentExport.filename.split('.').pop().toUpperCase();
+    $('export-type').textContent = extension;
+    $('export-summary').textContent = `${currentExport.accepted_count} accepted result${currentExport.accepted_count === 1 ? '' : 's'} reviewed. This file uses the strongest final or integrated result.`;
+    $('export-preview-toggle').hidden = !currentExport.mime_type.startsWith('text/html');
+    $('export-dialog').showModal();
+  } catch (error) { toast(error.message); }
+});
+function downloadPayload(payload) {
+  const blob = new Blob([payload.content], { type: payload.mime_type });
+  const url = URL.createObjectURL(blob), anchor = document.createElement('a');
+  anchor.href = url; anchor.download = payload.filename; document.body.append(anchor); anchor.click(); anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+$('export-download').addEventListener('click', () => { if (!currentExport) return; downloadPayload(currentExport); toast(`Downloaded ${currentExport.filename}.`); });
+$('export-record').addEventListener('click', async () => {
+  $('export-error').textContent = '';
+  try { const record = await request('/api/project/export?format=record'); downloadPayload(record); toast(`Downloaded ${record.filename}.`); }
+  catch (error) { $('export-error').textContent = error.message; }
+});
+$('export-preview-toggle').addEventListener('click', () => {
+  if (!currentExport) return;
+  const preview = $('export-preview'), opening = preview.hidden;
+  preview.hidden = !opening; preview.srcdoc = opening ? currentExport.content : '';
+  $('export-preview-toggle').textContent = opening ? 'Hide preview' : 'Preview';
+});
 $('new-project').addEventListener('click', () => { if (!confirm('Start a new project? Creating it will replace the current project and clear its tasks.')) return; $('goal-section').hidden = false; $('goal').value = ''; $('goal').focus(); $('goal-help').textContent = 'Creating this project will clear the previous task list.'; renderControls(); });
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b === button))); renderTasks(); }));
 document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => $(b.dataset.close).close()));
@@ -316,7 +349,24 @@ async function executeProviderTask(config, task, project, dependencyOutputs = []
 }
 function newTask(title, instruction, depends_on = [], assignee = null) { return { id: `t_${crypto.randomUUID()}`, seq: state.tasks.length + 1, project_id: state.project.id, title, instruction, state: 'queued', assigned_to: null, assignee, depends_on, result: '', review_note: '' }; }
 function sampleWorker(owner) { return { id: `w_${crypto.randomUUID()}`, owner, provider: 'mock', display: `${owner}'s Mock`, status: 'idle', last_seen: Date.now() / 1000 }; }
+function demoExport(format) {
+  if (!state.project) throw new Error('Create a project before exporting.');
+  const accepted = state.tasks.filter(t => t.state === 'accepted' && t.result?.trim());
+  const finalTask = [...accepted].sort((a, b) => (/(final|integrat|complete|deliverable|build)/i.test(b.title) ? 100 : 0) - (/(final|integrat|complete|deliverable|build)/i.test(a.title) ? 100 : 0) || b.depends_on.length - a.depends_on.length || b.seq - a.seq)[0];
+  const stem = state.project.goal.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'consortium-result';
+  if (format === 'record') {
+    return { filename: `${stem}-consortium.json`, mime_type: 'application/json;charset=utf-8', content: JSON.stringify({ schema: 'consortium.project.v1', exported_at: Date.now() / 1000, project: state.project, tasks: state.tasks, final_task_id: finalTask?.id || null }, null, 2), source_task: finalTask || null, accepted_count: accepted.length, total_tasks: state.tasks.length };
+  }
+  if (!finalTask) throw new Error('Accept at least one task result before exporting the final result.');
+  let content = finalTask.result.trim().replace(/^```[^\n]*\n([\s\S]*?)\n?```$/, '$1').trim();
+  const html = /<!doctype html|<html|(<head[\s>].*<body[\s>])|^<[a-z][\w-]*(?:\s|>)/is.test(content);
+  const json = !html && /^[{[]/.test(content) && (() => { try { JSON.parse(content); return true; } catch { return false; } })();
+  const extension = html ? '.html' : json ? '.json' : '.txt';
+  const mime_type = html ? 'text/html;charset=utf-8' : json ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
+  return { filename: `${stem}${extension}`, mime_type, content, source_task: { id: finalTask.id, title: finalTask.title, seq: finalTask.seq }, accepted_count: accepted.length, total_tasks: state.tasks.length };
+}
 async function demoRequest(path, body) {
+  if (path.startsWith('/api/project/export')) return demoExport(new URL(path, location.origin).searchParams.get('format') || 'artifact');
   if (path === '/api/project' && body) { clearTimeout(sampleTimer); state.project = { id: 'sample-project', goal: body.goal, state: 'planning', summary: '' }; state.tasks = []; state.selected = null; state.workers.forEach(w => w.status = 'idle'); return { project: state.project }; }
   if (path === '/api/project/plan') { state.tasks = []; for (const [title, instruction] of [['Define the page structure', 'Create semantic HTML for a team-matching page with a hero, a team list, and a join form. Use #hero, #teams, and #join.'], ['Design the visual system', 'Provide CSS for #hero, #teams, and #join. Use a blue and white palette, readable typography, and a responsive layout.'], ['Check the complete experience', 'Check keyboard navigation, form labels, mobile layout, and readable contrast. Report any missing requirements.']]) state.tasks.push(newTask(title, instruction)); state.project.state = 'active'; return { project: state.project, tasks: state.tasks, used_llm: false, note: 'Sample tasks only. No model was called.' }; }
   if (path === '/api/project/state') { state.project.state = body.state; return { project: state.project }; }
