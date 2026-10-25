@@ -105,6 +105,11 @@ function renderDetail() {
     sel.value = task.assignee || '';
   }
   $('detail-deps').textContent = task.depends_on?.length ? `Depends on: ${task.depends_on.map(id => state.tasks.find(t => t.id === id)?.title || id).join(', ')}` : '';
+  // Worker one-click: "Take this task" pins it to ME so my connected client
+  // (browser automatic worker or a running agent_client.py) runs it next.
+  const me = state.workers.find(w => w.id === workerId);
+  const takeable = me && ['queued', 'rejected'].includes(task.state) && task.assignee !== workerId && state.project?.state === 'active';
+  $('take-task').hidden = !takeable;
   $('output-section').hidden = !task.result; $('detail-output').textContent = task.result || ''; $('preview-output').hidden = !/<[a-z][\s\S]*>/i.test(task.result || '');
   $('review-note-section').hidden = !task.review_note; $('detail-review').textContent = task.review_note || '';
   $('review-form').hidden = task.state !== 'submitted' || state.project?.state === 'done';
@@ -201,6 +206,13 @@ $('cli-form').addEventListener('submit', async event => {
   } catch (error) { $('cli-status').textContent = ''; $('cli-error').textContent = error.message; }
 });
 $('cli-copy').addEventListener('click', () => copy($('cli-generated').value));
+$('take-task').addEventListener('click', async () => {
+  const task = selectedTask(); if (!task || !workerId) return;
+  try {
+    await mutate(`/api/tasks/${encodeURIComponent(task.id)}/assign`, { worker_id: workerId }, `You took "${task.title}". Your AI will run it next.`);
+    if (!automaticWorker) toast('Task is yours. Click "Claim next task" or run your worker client to start it.');
+  } catch {}
+});
 $('preview-output').addEventListener('click', () => { const frame = $('output-frame'); frame.hidden = !frame.hidden; if (!frame.hidden) frame.srcdoc = selectedTask()?.result || ''; });
 $('invite').addEventListener('click', () => { $('invite-address').value = location.origin + location.pathname; $('invite-help').textContent = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) ? 'For another laptop, replace localhost with the host’s LAN IP, keeping the port. Both devices must be on the same network. Use the backend server address, not the standalone demo.' : 'Share this address with teammates on the host’s network. The prototype uses a shared room without sign-in.'; $('invite-dialog').showModal(); });
 $('copy-address').addEventListener('click', () => copy($('invite-address').value));

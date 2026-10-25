@@ -702,6 +702,7 @@ textarea::placeholder, input::placeholder { color: #525866; }
 .assign-row { display: flex; align-items: center; gap: 7px; margin: -14px 0 24px; flex-wrap: wrap; }
 .inspector .assign-row label { margin: 0; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 .assign-row select { flex: 1; min-width: 120px; padding: 7px 9px; font-size: 11px; border-radius: 1px; border: 1px solid var(--line); background: var(--surface, #0b0e13); color: inherit; }
+.take-task { width: 100%; margin: 0 0 20px; }
 .inspector h3 {
   margin: 23px 0 10px;
   color: var(--muted);
