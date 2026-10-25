@@ -166,14 +166,22 @@ $('assign-btn').addEventListener('click', async () => {
   catch {}
 });
 function shellQuote(s) { return `"${String(s).replace(/(["\\$`])/g, '\\$1')}"`; }
-function cliCommandFor(workerId, owner, cliCmd) {
+// One pasted command: download the single-file worker from THIS server, then
+// boot it so the teammate's CLI agent starts pulling and submitting tasks.
+// No repo clone, no separate download step.
+function cliCommandFor(workerId, owner, cliCmd, os) {
   const server = location.origin;
-  return [
-    'cd agent-mesh',
-    `python worker/agent_client.py --server ${shellQuote(server)} ` +
-    `--owner ${shellQuote(owner)} --provider cli --cli-cmd ${shellQuote(cliCmd)} ` +
-    `--worker-id ${shellQuote(workerId)}`
-  ].join('\n');
+  const dl = server.replace(/\/$/, '') + '/worker';
+  const common = `--server ${shellQuote(server)} --owner ${shellQuote(owner)} ` +
+    `--provider cli --cli-cmd ${shellQuote(cliCmd)} --worker-id ${shellQuote(workerId)}`;
+  if (os === 'bash') {
+    // macOS / Linux: fetch to a temp file and exec it.
+    return `curl -fsSL ${shellQuote(dl)} -o /tmp/consortium_worker.py && ` +
+      `python3 /tmp/consortium_worker.py ${common}`;
+  }
+  // Windows PowerShell: download then run, as one line.
+  return `curl.exe -fsSL ${shellQuote(dl)} -o $env:TEMP\\consortium_worker.py; ` +
+    `python $env:TEMP\\consortium_worker.py ${common}`;
 }
 $('connect-cli-btn').addEventListener('click', () => {
   const task = selectedTask(); if (!task) return;
@@ -198,10 +206,13 @@ $('cli-form').addEventListener('submit', async event => {
     // 2. Pin this task to that slot so the CLI pulls exactly what you assigned.
     await request(`/api/tasks/${encodeURIComponent(task.id)}/assign`, { worker_id: wid });
     await sync();
-    // 3. Show the exact command for the teammate to run.
-    $('cli-generated').value = cliCommandFor(wid, owner, cliCmd);
+    // 3. Show the one-paste command for the teammate to run (both OSes).
+    const winCmd = cliCommandFor(wid, owner, cliCmd, 'powershell');
+    const nixCmd = cliCommandFor(wid, owner, cliCmd, 'bash');
+    $('cli-generated').value =
+      `# Windows (PowerShell):\n${winCmd}\n\n# macOS / Linux:\n${nixCmd}`;
     $('cli-command-box').hidden = false;
-    $('cli-status').textContent = `Task pinned to ${reg.worker.display}. Send them this command \u2014 their CLI will pick up the task automatically.`;
+    $('cli-status').textContent = `Task pinned to ${reg.worker.display}. Send them the line for their OS \u2014 one paste downloads the worker and boots their CLI, which then pulls the task automatically.`;
     log(`Reserved CLI worker for ${owner} and pinned "${task.title}".`);
   } catch (error) { $('cli-status').textContent = ''; $('cli-error').textContent = error.message; }
 });
