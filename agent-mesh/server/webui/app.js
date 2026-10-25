@@ -49,13 +49,17 @@ function renderControls() {
 }
 function render() {
   const p = state.project;
-  $('project-state').textContent = p ? ({ planning: 'Planning', active: 'Project active', paused: 'Project paused', done: 'Project complete' }[p.state] || p.state) : 'No project';
+  const projectLabel = p ? ({ planning: 'Planning', active: 'Project active', paused: 'Project paused', done: 'Project complete' }[p.state] || p.state) : 'No project';
+  $('project-state').textContent = projectLabel;
+  $('overview-state').textContent = p ? ({ planning: 'Planning', active: 'Active', paused: 'Paused', done: 'Complete' }[p.state] || p.state) : 'Not started';
   $('project-title').textContent = p?.goal || 'Give the team a direction.';
   $('project-summary').textContent = p?.summary || (p ? 'The lead sets the direction. Workers claim tasks and return results for review.' : 'Set a goal. Your lead AI will break it into work the team can share.');
   $('goal-section').hidden = Boolean(p); $('plan-bar').hidden = p?.state !== 'planning';
   const accepted = state.tasks.filter(t => t.state === 'accepted').length;
+  const submitted = state.tasks.filter(t => t.state === 'submitted').length;
   $('progress-text').textContent = state.tasks.length ? `${accepted} of ${state.tasks.length} tasks accepted` : 'No tasks yet'; $('progress-fill').style.width = `${state.tasks.length ? accepted / state.tasks.length * 100 : 0}%`;
-  $('task-count').textContent = state.tasks.length; $('review-count').textContent = state.tasks.filter(t => t.state === 'submitted').length;
+  $('overview-tasks').textContent = state.tasks.length; $('overview-review').textContent = submitted; $('overview-fill').style.width = `${state.tasks.length ? accepted / state.tasks.length * 100 : 0}%`;
+  $('task-count').textContent = state.tasks.length; $('review-count').textContent = submitted;
   renderWorkers(); renderTasks(); renderDetail(); renderControls();
 }
 function renderWorkers() {
