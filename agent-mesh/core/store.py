@@ -334,6 +334,16 @@ class Store:
                     created_at=t, updated_at=t,
                 )
                 self._tasks[fid] = followup
+                # Rewire: any task that depended on the REJECTED task must now
+                # depend on its follow-up instead, or it would be gated forever
+                # (the rejected id can never reach ACCEPTED). Flagged by Agent B.
+                for other in self._tasks.values():
+                    if other.id in (task.id, fid):
+                        continue
+                    if task.id in other.depends_on:
+                        other.depends_on = [fid if d == task.id else d
+                                            for d in other.depends_on]
+                        other.updated_at = now()
             task_snap = task.to_dict()
             follow_snap = followup.to_dict() if followup else None
             follow_id = followup.id if followup else None
