@@ -1,99 +1,113 @@
-# 🕸️ Agent Mesh
+# Consortium — leader-driven multi-AI collaboration
 
-**One prompt → an LLM splits it → the sub-tasks fan out in parallel to every
-teammate's AI → the pieces merge into one web page.**
+A **leader** runs this server on their laptop and attaches an AI (the **Lead AI**:
+Claude, Codex, or an open model like Kimi). Teammates open the LAN URL, register
+the AI *they* brought (a **Worker AI**), and each worker loops: pull the next
+instruction from the Lead AI, run it, submit the result. The Lead AI reviews
+results and issues follow-ups. It runs until the **leader marks the project done**.
 
-Built for hackathons: you show up, everyone has a *different* AI (Claude, Codex,
-…), and it's hard to work together. Agent Mesh turns the whole team's assistants
-into one coordinated worker pool behind a single prompt.
-
-## Why it's robust for a live demo
-
-- **Zero dependencies.** Pure Python standard library — no `pip install`, runs on
-  any laptop with Python 3.10+. (Great when you're on random hackathon wifi.)
-- **Heterogeneous by design.** Each agent sits behind one uniform `run_agent()`
-  wrapper, so a stranger's AI slots in by picking a provider — no code changes.
-- **Real parallelism.** Agents run concurrently in a thread pool (verified: two
-  1s agents finish in ~1s, not 2s).
-- **Graceful degradation.** The LLM dispatcher falls back to a deterministic
-  fixed split if it fails; a failed/key-less agent degrades its slot instead of
-  crashing the build. **The demo never fully dies on one bad call.**
-- **The collaboration is visible.** Live panels show each named agent, its
-  assigned sub-task, status, timing, and output — then the merged page renders.
+> This directory also contains the original one-shot **Agent Mesh** demo
+> (`server.py`, `agents.py`, `dispatcher.py`). Consortium is the newer
+> leader/worker system and lives in `core/`, `server/`, `lead/`, `worker/`.
 
 ## Architecture
 
 ```
-team prompt
-   │
-   ▼
-[LLM dispatcher]  → JSON { "structure": ..., "style": ... }   (fixed slots)
-   │  └─ falls back to deterministic fixed split on any failure
-   ▼
-parallel fan-out ──► slot "structure"  →  Agent A  (HTML + JS)
-                └──► slot "style"       →  Agent B  (CSS + content)
-   │
-   ▼
-merge → one standalone HTML document
-   │
-   ▼
-live UI: prompt box → per-agent panels → rendered preview
+leader's machine
+  ┌───────────────────────────────────────┐
+  │  server/app.py  (stdlib HTTP + SSE)     │
+  │    ├─ core/      state, store, lifecycle│  ← Agent A
+  │    ├─ lead/      Lead AI + orchestrator │  ← Agent B
+  │    └─ worker/    worker AI + poll client│  ← Agent B
+  └───────────────────────────────────────┘
+        ▲ HTTP+SSE            ▲ HTTP (poll)
+   teammate browsers     teammate worker loops
 ```
 
-Files:
-- `agents.py` — uniform wrapper over Anthropic / OpenAI / mock providers.
-- `dispatcher.py` — LLM splitter (strict JSON) + fixed-split fallback + merge.
-- `server.py` — stdlib HTTP server, SSE streaming, join/roster/build endpoints, UI.
-- `selftest.py` — in-process end-to-end test (run it to prove the pipeline works).
+Design choices: **pull model** (workers poll `/next`; resilient to flaky wifi),
+**SSE** for live UI updates, **zero third-party dependencies** (Python 3.10+
+stdlib only), and **graceful degradation** (no Lead AI key → deterministic
+template plan + auto-accept, so the demo always runs).
 
-## Run it
+## Run it (leader)
 
 ```bash
-# optional: give the host keys so blank-key agents just work
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...        # also powers the LLM dispatcher
-
-python3 server.py                   # http://0.0.0.0:8000
-# custom port:  PORT=9000 python3 server.py
+cd agent-mesh
+python -m server.app                 # http://0.0.0.0:8000
+PORT=9000 python -m server.app       # custom port
 ```
 
-A `.env` file (same dir) is auto-loaded, no library needed:
+A `.env` in `agent-mesh/` is auto-loaded (no library needed):
 
 ```
+LEAD_PROVIDER=anthropic              # or openai | kimi | mock
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
+KIMI_API_KEY=...
+KIMI_BASE_URL=https://...            # OpenAI-compatible endpoint for Kimi
+CONSORTIUM_ROOM_CODE=hunter2         # optional: require a room code to join
 ```
 
-## Demo across your 3 computers
+Teammates then open `http://<leader-LAN-ip>:8000`. Find the IP with `ipconfig`
+(Windows) or `ifconfig`/`ip addr` (macOS/Linux).
 
-1. **Host laptop:** `python3 server.py`, note its LAN IP (`ipconfig` / `ifconfig`).
-2. **Each teammate's laptop:** open `http://<host-LAN-ip>:8000`, enter a name,
-   pick the AI they brought, paste their key (or leave blank to use host env),
-   click **Register**. They appear in everyone's roster live.
-3. **Anyone:** type one build request, hit **🚀 Dispatch to the mesh**.
-4. Watch the sub-tasks fan out to the different agents in parallel and the page
-   assemble live.
+## Typical flow
 
-> No keys handy while testing? Register agents as **Mock** — the full flow
-> (split → parallel fan-out → merge → render) runs end-to-end with canned output.
+1. Leader: `POST /api/project {goal}` then `POST /api/project/plan` — the Lead AI
+   turns the goal into tasks and the project goes `active`.
+2. Teammates: register a worker (browser UI or the python client below).
+3. Workers loop `heartbeat → next → submit`; the Lead AI reviews each result.
+4. Leader watches progress live over `/api/events` and finally
+   `POST /api/project/state {"state":"done"}`.
 
-## Prove it works (no keys, no network needed)
+### Python worker client (teammate, no browser needed)
 
 ```bash
-python3 selftest.py      # runs the whole pipeline in-process, writes sample_output.html
+cd agent-mesh
+python worker/agent_client.py --server http://<leader-ip>:8000 --owner Alice --provider mock
+# real AI:  --provider anthropic   (key stays on the teammate's machine)
 ```
 
-## 60-second pitch
+### Lead auto-reviewer (optional, runs on the leader's side)
 
-> "At hackathons everyone brings a different AI and they work in silos. Agent Mesh
-> takes **one** team prompt, has an LLM split it into tasks, and dispatches those
-> to **everyone's** AI in parallel — Alice's Claude builds the structure while
-> Bob's Codex builds the styling — then merges the results into one page. Your
-> whole team's assistants become a single coordinated worker pool."
+Without review, dependent tasks (e.g. the final integration task) never unblock.
+The Lead AI can review automatically over the public API:
 
-## Extending past the MVP
+```bash
+python -m lead.lead_agent --server http://127.0.0.1:8000 --auto-done
+```
 
-- More slots / agents: `dispatcher.py` slots + `assign_agents_to_slots` already
-  round-robin extra agents; the merge is the only part that assumes two slots.
-- New provider: add one `_call_x()` in `agents.py` and a branch in `run_agent`.
-- Smarter merge: replace `merge()` with an "assembler" LLM call.
+## API
+
+The full, frozen HTTP + SSE contract is **`WORK_SPLIT.md` §4**. The frontend is
+built against that section alone. Quick smoke check:
+
+```bash
+curl http://localhost:8000/api/project
+curl -X POST http://localhost:8000/api/project  -d '{"goal":"demo landing page"}'
+curl -X POST http://localhost:8000/api/project/plan -d '{}'
+curl http://localhost:8000/api/tasks
+```
+
+The server serves a built frontend from `server/static/` if present, otherwise a
+minimal status page. The frontend agent drops its build into `server/static/`.
+
+## Tests (no keys, no network)
+
+```bash
+cd agent-mesh
+python -m tests.test_store          # core store: atomic claim, deps, rejection rewire, stale requeue
+python -m tests.test_server_routes  # every §4 route + SSE event shapes
+python -m tests.test_orchestrator   # Agent B: planning/review/summarize
+python -m tests.test_e2e            # full A+B integration: plan → workers → done
+```
+
+## File ownership (see `WORK_SPLIT.md`)
+
+| Area | Owner | Files |
+|---|---|---|
+| State, store, lifecycle | Agent A | `core/*` |
+| HTTP server, routing, SSE | Agent A | `server/*`, `README.md` |
+| Lead AI + orchestration | Agent B | `lead/*` |
+| Worker AI + client loop | Agent B | `worker/*` |
+| Integration test | Both | `tests/test_e2e.py` |

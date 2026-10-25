@@ -159,6 +159,39 @@ def test_bulk_index_deps_resolved():
     print("  bulk index-dep resolution OK (Agent B /plan contract)")
 
 
+def test_rejection_rewires_dependents():
+    """A task depending on a rejected task must be rewired to its follow-up,
+    otherwise it is gated forever (flagged by Agent B's HANDOFF #2)."""
+    s = Store()
+    s.create_project("rewire")
+    s.set_state(ACTIVE)
+    a = s.add_task("A", "first")
+    b = s.add_task("B", "depends on A", depends_on=[a.id])
+    w = s.register_worker("alice", "mock").id
+
+    # Claim + submit A, then REJECT with a follow-up.
+    s.claim_next(w)
+    s.submit(w, a.id, "bad output")
+    _, follow = s.review(a.id, REJECTED, "redo", followup_instruction="do it properly")
+    assert follow is not None
+
+    # B must now depend on the follow-up, not the dead rejected id.
+    b_after = s.get_task(b.id)
+    assert follow.id in b_after.depends_on, "B was not rewired to the follow-up"
+    assert a.id not in b_after.depends_on, "B still points at the rejected task"
+
+    # B must not be claimable yet (follow-up not accepted).
+    r = s.claim_next(w)
+    assert r["task"]["id"] == follow.id, "should claim the follow-up next"
+    s.submit(w, follow.id, "good output")
+    s.review(follow.id, ACCEPTED)
+
+    # Now B unblocks.
+    r2 = s.claim_next(w)
+    assert r2["task"]["id"] == b.id, "B did not unblock after follow-up accepted"
+    print("  rejection rewires dependents OK (Agent B HANDOFF #2)")
+
+
 def test_stale_requeue():
     """A worker that goes silent has its in-flight task requeued."""
     s = Store()
@@ -185,5 +218,6 @@ if __name__ == "__main__":
     test_submit_review_followup()
     test_pause_blocks_claim()
     test_bulk_index_deps_resolved()
+    test_rejection_rewires_dependents()
     test_stale_requeue()
     print("ALL STORE TESTS PASSED")
