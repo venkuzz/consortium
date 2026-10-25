@@ -1,0 +1,2 @@
+# Agent Mesh has ZERO third-party dependencies — Python 3.10+ standard library only.
+# Nothing to install. This file is intentionally empty of packages.

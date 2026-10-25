@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent Mesh Output</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#0f172a;color:#e2e8f0}
+  header{padding:48px 24px;text-align:center;background:linear-gradient(135deg,#6366f1,#8b5cf6)}
+  header h1{margin:0;font-size:2.2rem}
+  main{max-width:720px;margin:0 auto;padding:32px 24px}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:20px;margin:12px 0}
+  .btn{display:inline-block;background:#6366f1;color:#fff;border:none;padding:12px 20px;border-radius:8px;cursor:pointer}
+  input{padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;width:100%;box-sizing:border-box;margin:6px 0}
+</style>
+<!-- mock styling from Bob's Mock -->
+</head>
+<body>
+<!-- mock structure from Alice's Mock -->
+<header><h1>Demo Page</h1><p>Built by the agent mesh</p></header>
+<main>
+  <div class='card'><h2>Welcome</h2><p>This page was assembled from independent pieces produced by different teammates' AIs in parallel.</p></div>
+  <div class='card'><h2>Sign up</h2>
+    <input id='email' placeholder='you@example.com' />
+    <button class='btn' onclick="document.getElementById('msg').textContent='Thanks, '+ (document.getElementById('email').value||'friend') + '!'">Join</button>
+    <p id='msg'></p>
+  </div>
+</main>
+</body>
+</html>
