@@ -53,11 +53,13 @@ def _mock_output(title: str, instruction: str) -> str:
 
 def run_worker(provider: str, task: dict, project: Optional[dict] = None,
                dependency_outputs: Optional[list[tuple[str, str]]] = None,
-               api_key: Optional[str] = None, model: Optional[str] = None) -> dict:
+               api_key: Optional[str] = None, model: Optional[str] = None,
+               base_url: Optional[str] = None) -> dict:
     """Execute one task with the worker's AI.
 
     -> {'ok': bool, 'output': str, 'error': str, 'elapsed': float}
-    (matches the body of POST /api/worker/{id}/submit minus task_id)."""
+    (matches the body of POST /api/worker/{id}/submit minus task_id).
+    `base_url` is used by provider='custom' to target any OpenAI-compatible API."""
     start = time.time()
     title = task.get("title", "")
     instruction = task.get("instruction", "")
@@ -71,7 +73,7 @@ def run_worker(provider: str, task: dict, project: Optional[dict] = None,
             user = prompts.worker_user(project.get("goal", ""), project.get("summary", ""),
                                        title, instruction, dependency_outputs or [])
             out = strip_fence(complete(provider, prompts.WORKER_SYSTEM, user, api_key, model,
-                                       max_tokens=8000))
+                                       max_tokens=8000, base_url=base_url))
         return {"ok": True, "output": out, "error": "", "elapsed": round(time.time() - start, 2)}
     except Exception as e:  # graceful per-worker failure
         return {"ok": False, "output": "", "error": str(e)[:500],

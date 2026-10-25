@@ -119,7 +119,8 @@ class Heartbeat(threading.Thread):
 
 def run_loop(client: ConsortiumClient, owner: str, provider: str, api_key=None, model=None,
              room_code=None, poll: float = 2.0, long_poll: int = 0, max_tasks: int = 0,
-             log=print, stop_event: Optional[threading.Event] = None) -> int:
+             log=print, stop_event: Optional[threading.Event] = None,
+             base_url=None) -> int:
     """Register, then claim -> execute -> submit until the project is done.
 
     Returns the number of tasks completed. `max_tasks`/`stop_event` exist for tests."""
@@ -173,7 +174,7 @@ def run_loop(client: ConsortiumClient, owner: str, provider: str, api_key=None, 
 
             log(f"-> task #{task.get('seq', '?')} {task.get('title', task['id'])}")
             result = run_worker(provider, task, r.get("project"),
-                                dependency_outputs(client, task), api_key, model)
+                                dependency_outputs(client, task), api_key, model, base_url)
             try:
                 client.submit(wid, task["id"], result)
             except Exception as e:
@@ -196,10 +197,16 @@ def main(argv=None):
     ap.add_argument("--provider", required=True, choices=PROVIDERS)
     ap.add_argument("--api-key", default=None, help="your key (stays local); default: env var")
     ap.add_argument("--model", default=None)
+    ap.add_argument("--base-url", default=None,
+                    help="OpenAI-compatible endpoint for --provider custom "
+                         "(e.g. https://openrouter.ai/api/v1)")
     ap.add_argument("--room-code", default=None)
     ap.add_argument("--poll", type=float, default=2.0, help="seconds between polls when idle")
     ap.add_argument("--long-poll", type=int, default=0, help="ask server to hold /next up to N s")
     args = ap.parse_args(argv)
+
+    if args.provider == "custom" and not (args.base_url or os.getenv("CUSTOM_BASE_URL")):
+        ap.error("--provider custom requires --base-url (or CUSTOM_BASE_URL env)")
 
     client = ConsortiumClient(args.server)
 
@@ -208,7 +215,8 @@ def main(argv=None):
 
     try:
         n = run_loop(client, args.owner, args.provider, args.api_key, args.model,
-                     args.room_code, args.poll, args.long_poll, log=log)
+                     args.room_code, args.poll, args.long_poll, log=log,
+                     base_url=args.base_url)
         log(f"finished: {n} task(s) completed")
     except KeyboardInterrupt:
         log("interrupted; unregistering (in-flight task will be requeued)")

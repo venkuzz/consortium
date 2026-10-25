@@ -5,7 +5,7 @@ const state = { project: null, tasks: [], workers: [], filter: 'all', selected: 
 const symbols = { queued: '○', assigned: '◐', submitted: '◈', accepted: '✓', rejected: '×' };
 const labels = { queued: 'Queued', assigned: 'In progress', submitted: 'Needs review', accepted: 'Accepted', rejected: 'Changes requested' };
 const sessionKey = `consortium-worker:${demo ? 'demo' : location.origin}`;
-let workerId = null, stream, toastTimer, sampleTimer, refreshAgain = false;
+let workerId = null, stream, toastTimer, sampleTimer, refreshAgain = false, automaticWorker = null, workerGeneration = 0;
 try { workerId = demo ? null : sessionStorage.getItem(sessionKey); } catch {}
 function setWorker(id) { workerId = id; try { id ? sessionStorage.setItem(sessionKey, id) : sessionStorage.removeItem(sessionKey); } catch {} }
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6000); }
@@ -40,7 +40,8 @@ function renderControls() {
   $('create').disabled = unavailable || !$('goal').value.trim();
   $('plan').textContent = state.busy ? 'Working…' : 'Plan tasks';
   $('add-task').disabled = unavailable || !project || project.state === 'done';
-  $('claim').disabled = unavailable || project?.state !== 'active' || state.tasks.some(t => t.assigned_to === workerId && t.state === 'assigned');
+  $('claim').disabled = unavailable || !!automaticWorker || project?.state !== 'active' || state.tasks.some(t => t.assigned_to === workerId && t.state === 'assigned');
+  $('claim').textContent = automaticWorker ? 'Automatic worker active' : 'Claim next task';
   $('sample-run').disabled = unavailable || project?.state !== 'active' || !state.tasks.some(t => t.state === 'queued');
   $('new-project').hidden = !project; $('pause').hidden = !project || !['active', 'paused'].includes(project.state); $('done').hidden = !project || project.state === 'done';
   $('pause').textContent = project?.state === 'paused' ? 'Resume' : 'Pause';
@@ -61,6 +62,7 @@ function renderWorkers() {
   $('workers').replaceChildren(); $('worker-count').textContent = state.workers.length; $('worker-empty').hidden = !!state.workers.length;
   for (const w of state.workers) { const row = element('div', undefined, 'worker-row'), avatar = element('span', w.display.slice(0, 1).toUpperCase(), 'avatar'), text = element('div'); text.append(element('strong', w.display), element('small', `${w.provider} / ${w.status}`)); row.append(avatar, text, element('span', '', `worker-state ${w.status}`)); $('workers').append(row); }
   const me = state.workers.find(w => w.id === workerId); $('worker-console').hidden = !me; $('my-worker').textContent = me ? `${me.display} (${me.status})` : '';
+  $('worker-help').textContent = automaticWorker ? 'This tab claims eligible tasks, calls your selected provider, and submits the result automatically.' : 'Use your AI to complete the instruction, then submit the result.';
   $('join').hidden = !!me;
 }
 function renderTasks() {
@@ -96,15 +98,31 @@ $('new-project').addEventListener('click', () => { if (!confirm('Start a new pro
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b === button))); renderTasks(); }));
 document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => $(b.dataset.close).close()));
 $('join').addEventListener('click', () => { $('join-error').textContent = ''; $('join-dialog').showModal(); $('owner').focus(); });
-$('provider').addEventListener('change', () => { $('credentials').hidden = demo || $('provider').value === 'mock'; $('key').value = ''; });
+function updateProviderFields() {
+  const provider = demo ? 'mock' : $('provider').value;
+  $('credentials').hidden = provider === 'mock';
+  $('custom-endpoint').hidden = provider !== 'custom';
+  if (provider !== 'custom') $('base-url').value = '';
+  $('key').value = '';
+}
+$('provider').addEventListener('change', updateProviderFields);
 $('join-dialog').addEventListener('close', () => { $('key').value = ''; });
 $('join-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!$('owner').value.trim()) return;
   $('join-error').textContent = '';
-  try { const data = await mutate('/api/worker/register', { owner: $('owner').value.trim(), provider: demo ? 'mock' : $('provider').value, api_key: demo ? '' : $('key').value.trim(), model: demo ? '' : $('model').value.trim(), room_code: $('room-code').value.trim() }); if (!data) return; setWorker(data.worker.id); $('join-dialog').close(); $('key').value = ''; render(); log(`${data.worker.display} joined.`); }
+  const provider = demo ? 'mock' : $('provider').value;
+  const config = { provider, key: demo ? '' : $('key').value.trim(), baseUrl: demo ? '' : $('base-url').value.trim(), model: demo ? '' : $('model').value.trim() };
+  if (provider === 'custom' && config.key && !config.baseUrl) { $('join-error').textContent = 'Add the OpenAI-compatible base URL to run this worker automatically.'; return; }
+  try {
+    const data = await mutate('/api/worker/register', { owner: $('owner').value.trim(), provider, api_key: '', model: config.model, room_code: $('room-code').value.trim() });
+    if (!data) return;
+    setWorker(data.worker.id); $('join-dialog').close(); $('key').value = '';
+    if (provider === 'mock' || config.key) startAutomaticWorker(data.worker.id, config);
+    render(); log(`${data.worker.display} joined${automaticWorker ? ' in automatic mode' : ' in manual mode'}.`);
+  }
   catch (error) { $('join-error').textContent = error.message; }
 });
-$('leave').addEventListener('click', async () => { try { await mutate(`/api/worker/${encodeURIComponent(workerId)}/unregister`, {}, 'You left the worker team.'); setWorker(null); render(); } catch {} });
+$('leave').addEventListener('click', async () => { try { await mutate(`/api/worker/${encodeURIComponent(workerId)}/unregister`, {}, 'You left the worker team.'); stopAutomaticWorker(); setWorker(null); render(); } catch {} });
 $('claim').addEventListener('click', async () => { try { const data = await mutate(`/api/worker/${encodeURIComponent(workerId)}/next`, {}); if (data?.task) { state.selected = data.task.id; $('worker-output').value = ''; render(); log(`Claimed: ${data.task.title}`); } else toast(data?.stop ? 'The project is paused or done.' : 'No eligible tasks yet. Waiting for reviews or new tasks.'); } catch {} });
 $('submit-form').addEventListener('submit', async event => { event.preventDefault(); const task = selectedTask(); if (!task || !$('worker-output').value.trim()) return; try { await mutate(`/api/worker/${encodeURIComponent(workerId)}/submit`, { task_id: task.id, output: $('worker-output').value, ok: true, error: '', elapsed: 0 }, `Submitted: ${task.title}`); $('worker-output').value = ''; } catch {} });
 $('review-form').addEventListener('submit', async event => { event.preventDefault(); const task = selectedTask(), decision = event.submitter?.value; if (!task || !['accepted', 'rejected'].includes(decision)) return; try { await mutate(`/api/tasks/${encodeURIComponent(task.id)}/review`, { decision, note: $('review-note').value.trim(), ...(decision === 'rejected' && $('followup').value.trim() ? { followup_instruction: $('followup').value.trim() } : {}) }, `${task.title}: ${decision}.`); $('review-note').value = ''; $('followup').value = ''; } catch {} });
@@ -123,6 +141,60 @@ function connectStream() {
   stream.onerror = () => { connection(false); renderControls(); }; // EventSource reconnects and replays a fresh snapshot.
 }
 async function heartbeat() { if (!workerId || demo) return; try { await request(`/api/worker/${encodeURIComponent(workerId)}/heartbeat`, {}); } catch {} }
+const PROVIDER_BASE = { openai: 'https://api.openai.com/v1', kimi: 'https://api.moonshot.ai/v1' };
+const DEFAULT_MODEL = { anthropic: 'claude-sonnet-4-5', openai: 'gpt-4o', kimi: 'moonshot-v1-8k', custom: 'gpt-3.5-turbo' };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function stopAutomaticWorker() { workerGeneration += 1; automaticWorker = null; renderControls(); }
+function startAutomaticWorker(id, config) {
+  const generation = ++workerGeneration;
+  automaticWorker = { id, ...config };
+  renderControls();
+  runAutomaticWorker(generation, automaticWorker);
+}
+async function runAutomaticWorker(generation, config) {
+  while (generation === workerGeneration && automaticWorker && workerId === config.id) {
+    if (state.project?.state !== 'active') { await sleep(1400); continue; }
+    try {
+      const claim = await request(`/api/worker/${encodeURIComponent(config.id)}/next`, {});
+      if (claim.stop) break;
+      if (!claim.task) { await sleep(1800); continue; }
+      state.selected = claim.task.id; await sync(); render();
+      log(`Automatic worker claimed: ${claim.task.title}`);
+      const started = performance.now();
+      let output = '', ok = true, error = '';
+      try { output = await executeProviderTask(config, claim.task, claim.project || state.project); }
+      catch (providerError) { ok = false; error = String(providerError.message || providerError).slice(0, 500); output = `[worker error from ${config.provider}] ${error}`; }
+      if (generation !== workerGeneration || !automaticWorker) break;
+      await request(`/api/worker/${encodeURIComponent(config.id)}/submit`, { task_id: claim.task.id, output, ok, error, elapsed: +((performance.now() - started) / 1000).toFixed(2) });
+      await sync(); log(`${claim.task.title}: ${ok ? 'submitted automatically' : 'provider error submitted for review'}.`);
+    } catch (error) {
+      if (generation !== workerGeneration) break;
+      log(`Automatic worker paused after an error: ${error.message}`);
+      await sleep(3000);
+    }
+  }
+  if (generation === workerGeneration) { automaticWorker = null; renderControls(); }
+}
+async function executeProviderTask(config, task, project) {
+  if (config.provider === 'mock') {
+    await sleep(900 + Math.random() * 900);
+    return `<!-- ${task.title} · generated by the browser mock worker -->\n<section data-task="${task.id}">\n  <p>Deliverable for: ${project?.goal || 'Consortium project'}</p>\n  <p>${task.instruction.slice(0, 240)}</p>\n</section>`;
+  }
+  const system = 'You are a worker AI on a collaborative build team. Produce only the deliverable requested by the instruction, without a preamble.';
+  const user = `Project goal: ${project?.goal || ''}\nTask: ${task.title}\nInstruction:\n${task.instruction}`;
+  if (config.provider === 'anthropic') {
+    const response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'x-api-key': config.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'anthropic-dangerous-direct-browser-access': 'true' }, body: JSON.stringify({ model: config.model || DEFAULT_MODEL.anthropic, max_tokens: 4096, system, messages: [{ role: 'user', content: user }] }), signal: AbortSignal.timeout(180000) });
+    if (!response.ok) throw new Error(`Anthropic returned ${response.status}: ${(await response.text()).slice(0, 180)}`);
+    const data = await response.json();
+    return (data.content || []).filter(block => block.type === 'text').map(block => block.text).join('').trim() || '[empty response]';
+  }
+  const base = config.provider === 'custom' ? config.baseUrl : PROVIDER_BASE[config.provider];
+  if (!base) throw new Error('No API base URL is configured for this provider.');
+  const response = await fetch(base.replace(/\/$/, '') + '/chat/completions', { method: 'POST', headers: { Authorization: `Bearer ${config.key}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: config.model || DEFAULT_MODEL[config.provider], temperature: .3, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }), signal: AbortSignal.timeout(180000) });
+  if (!response.ok) throw new Error(`Provider returned ${response.status}: ${(await response.text()).slice(0, 180)}`);
+  const data = await response.json();
+  return (data.choices?.[0]?.message?.content || '').trim() || '[empty response]';
+}
 function newTask(title, instruction, depends_on = []) { return { id: `t_${crypto.randomUUID()}`, seq: state.tasks.length + 1, project_id: state.project.id, title, instruction, state: 'queued', assigned_to: null, depends_on, result: '', review_note: '' }; }
 function sampleWorker(owner) { return { id: `w_${crypto.randomUUID()}`, owner, provider: 'mock', display: `${owner}'s Mock`, status: 'idle', last_seen: Date.now() / 1000 }; }
 async function demoRequest(path, body) {
@@ -150,4 +222,5 @@ $('sample-run').addEventListener('click', () => {
 $('demo-banner').hidden = !demo;
 if (demo) { $('provider').value = 'mock'; $('provider').disabled = true; $('goal').value = 'Build a team-matching page for our hackathon.'; connection(true); log('Sample workspace ready. Create a project to begin.'); render(); }
 else { render(); sync(); connectStream(); setInterval(heartbeat, 5000); }
-window.addEventListener('pagehide', () => stream?.close());
+updateProviderFields();
+window.addEventListener('pagehide', () => { stopAutomaticWorker(); stream?.close(); });
