@@ -89,8 +89,9 @@ curl -X POST http://localhost:8000/api/project/plan -d '{}'
 curl http://localhost:8000/api/tasks
 ```
 
-The server serves a built frontend from `server/static/` if present, otherwise a
-minimal status page. The frontend agent drops its build into `server/static/`.
+The server serves the frontend from `server/webui/` (a live constellation
+"mission control" UI — pure canvas + vanilla JS, no build step). If that folder
+is absent it falls back to a minimal status page.
 
 ## Tests (no keys, no network)
 

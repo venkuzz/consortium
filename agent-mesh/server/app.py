@@ -52,7 +52,7 @@ _load_dotenv()
 HUB = SSEHub()
 STORE = Store(broadcast=HUB.broadcast)
 
-STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui")
 
 # ── route table: (method, compiled_path_regex) -> handler(store, body, params)
 # Path params use named groups, e.g. (?P<id>[^/]+).
@@ -233,7 +233,7 @@ a{color:#5b9dff}</style></head>
 <body>
 <h1>Consortium backend is running</h1>
 <p>The API is live. The frontend build isn't present yet
-(<code>server/static/</code> is empty).</p>
+(<code>server/webui/</code> is empty).</p>
 <p>API contract: see <code>agent-mesh/WORK_SPLIT.md</code> §4. Live state stream:
 <code>GET /api/events</code>.</p>
 <h3>Quick check</h3>

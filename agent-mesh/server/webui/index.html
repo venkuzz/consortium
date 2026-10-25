@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Consortium · Mission Control</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%235b9dff'/%3E%3Ccircle cx='6' cy='8' r='2.5' fill='%233ecf8e'/%3E%3Ccircle cx='26' cy='10' r='2.5' fill='%23ffb454'/%3E%3Ccircle cx='24' cy='24' r='2.5' fill='%23c084fc'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+<!-- Live physics constellation renders here, behind the UI -->
+<canvas id="constellation"></canvas>
+
+<!-- Top bar -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <span class="brand-name">CONSORTIUM</span>
+    <span class="brand-sub">mission control</span>
+  </div>
+  <div class="link-state">
+    <span id="conn-dot" class="conn-dot"></span>
+    <span id="conn-text">connecting…</span>
+  </div>
+  <div class="phase" id="phase-pill" data-state="none">
+    <span id="phase-label">no project</span>
+  </div>
+</header>
+
+<!-- Left deck: leader controls -->
+<aside class="deck deck-left" id="deck-left">
+  <button class="deck-toggle" data-side="left" title="collapse">‹</button>
+
+  <section class="panel">
+    <h2>Leader console</h2>
+    <label class="field">
+      <span>Mission goal</span>
+      <textarea id="goal" rows="3" placeholder="e.g. Build a landing page for a hackathon team-matching app with a hero and a signup form"></textarea>
+    </label>
+    <div class="btn-row">
+      <button id="btn-create" class="btn btn-ghost">Set goal</button>
+      <button id="btn-plan" class="btn btn-primary">Plan &amp; launch ▸</button>
+    </div>
+    <p id="plan-note" class="note"></p>
+    <div class="btn-row phase-controls">
+      <button id="btn-pause" class="btn btn-ghost" disabled>Pause</button>
+      <button id="btn-resume" class="btn btn-ghost" disabled>Resume</button>
+      <button id="btn-done" class="btn btn-danger" disabled>Mark done</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Add a task</h2>
+    <label class="field"><span>Title</span>
+      <input id="t-title" placeholder="Footer section" /></label>
+    <label class="field"><span>Instruction</span>
+      <textarea id="t-instruction" rows="2" placeholder="Build a footer with #footer containing…"></textarea></label>
+    <button id="btn-addtask" class="btn btn-ghost full">+ Enqueue task</button>
+  </section>
+
+  <section class="panel counters" id="counters">
+    <div class="counter" data-k="queued"><b id="c-queued">0</b><span>queued</span></div>
+    <div class="counter" data-k="assigned"><b id="c-assigned">0</b><span>working</span></div>
+    <div class="counter" data-k="submitted"><b id="c-submitted">0</b><span>review</span></div>
+    <div class="counter" data-k="accepted"><b id="c-accepted">0</b><span>done</span></div>
+    <div class="counter" data-k="rejected"><b id="c-rejected">0</b><span>redo</span></div>
+  </section>
+</aside>
+
+<!-- Right deck: join + roster + review -->
+<aside class="deck deck-right" id="deck-right">
+  <button class="deck-toggle" data-side="right" title="collapse">›</button>
+
+  <section class="panel">
+    <h2>Bring your AI</h2>
+    <label class="field"><span>Your name</span>
+      <input id="w-owner" placeholder="Alice" /></label>
+    <label class="field"><span>Provider</span>
+      <select id="w-provider">
+        <option value="anthropic">Claude · Anthropic</option>
+        <option value="openai">Codex · OpenAI</option>
+        <option value="kimi">Kimi · open model</option>
+        <option value="mock" selected>Mock · no key</option>
+      </select></label>
+    <label class="field"><span>API key <em>(optional)</em></span>
+      <input id="w-key" type="password" placeholder="stays between you and the host" /></label>
+    <button id="btn-join" class="btn btn-primary full">Join the mesh ✦</button>
+    <p id="join-note" class="note"></p>
+  </section>
+
+  <section class="panel">
+    <h2>The minds <span id="roster-count" class="chip">0</span></h2>
+    <div id="roster" class="roster"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Awaiting review <span id="review-count" class="chip chip-amber">0</span></h2>
+    <div id="review-queue" class="review-queue"></div>
+  </section>
+</aside>
+
+<!-- Bottom center: live event ticker -->
+<footer class="ticker-wrap">
+  <div class="ticker-label">live feed</div>
+  <div id="ticker" class="ticker"></div>
+</footer>
+
+<!-- Task inspector (click a task node) -->
+<div id="inspector" class="inspector hidden">
+  <button id="insp-close" class="insp-close">✕</button>
+  <div class="insp-head">
+    <span id="insp-seq" class="insp-seq"></span>
+    <h3 id="insp-title"></h3>
+    <span id="insp-state" class="state-chip"></span>
+  </div>
+  <div class="insp-section">
+    <h4>Instruction</h4>
+    <pre id="insp-instruction"></pre>
+  </div>
+  <div class="insp-section" id="insp-deps-section">
+    <h4>Depends on</h4>
+    <div id="insp-deps" class="dep-chips"></div>
+  </div>
+  <div class="insp-section" id="insp-result-section">
+    <h4>Result</h4>
+    <pre id="insp-result"></pre>
+  </div>
+  <div class="insp-review" id="insp-review">
+    <input id="insp-note" placeholder="review note (optional)" />
+    <div class="btn-row">
+      <button id="insp-accept" class="btn btn-ok full">Accept ✓</button>
+      <button id="insp-reject" class="btn btn-danger full">Reject ↺</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

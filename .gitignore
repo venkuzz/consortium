@@ -13,6 +13,3 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-
-# Build output served by the server (frontend agent populates at deploy time)
-agent-mesh/server/static/
