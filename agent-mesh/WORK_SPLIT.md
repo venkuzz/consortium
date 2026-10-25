@@ -171,6 +171,17 @@ Two client roles hit the API:
 No auth for the MVP. A single optional shared `room_code` MAY be posted on
 register; if the host set one, mismatches return `403`. Keep it optional.
 
+### 4.1b Health probe
+
+#### `GET /api/health`
+Liveness/reachability probe (no project required). Teammates hit this to confirm
+the server is reachable before joining; also useful for monitors.
+```json
+{ "ok": true, "service": "consortium", "time": 1730000500.0,
+  "uptime": 123.4, "project_state": "active"|null,
+  "workers_online": 3, "sse_clients": 2 }
+```
+
 ---
 
 ### 4.2 Project endpoints  (owner: Agent A, logic calls into Agent B)

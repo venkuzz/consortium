@@ -58,6 +58,15 @@ def run():
         assert b"EventSource" in js and b"/api/events" in js
         print("  index.html / app.css / app.js served with correct content types")
 
+        # 1b. health endpoint (reachability probe teammates use)
+        s, ct, hb = _get("/api/health")
+        assert s == 200 and "application/json" in ct, (s, ct)
+        health = json.loads(hb)
+        assert health["ok"] is True and health["service"] == "consortium"
+        for k in ("uptime", "project_state", "workers_online", "sse_clients"):
+            assert k in health, f"health missing {k}"
+        print("  /api/health returns liveness payload")
+
         # 2. drive the API the way the UI does
         s, _ = _post("/api/project", {"goal": "Build a landing page"})
         assert s == 200
