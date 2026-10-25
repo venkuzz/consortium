@@ -13,3 +13,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Tools / large binaries (never commit cloudflared — share.ps1 downloads it)
+cloudflared.exe
+.consortium/
