@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["MOCK_DELAY"] = "0"
 
-from lead import lead_ai, orchestrator  # noqa: E402
+from lead import lead_agent, lead_ai, orchestrator  # noqa: E402
 from worker import agent_client, worker_agent  # noqa: E402
 
 worker_agent.MOCK_DELAY = 0.0
@@ -180,7 +180,8 @@ class WorkerAgentTests(unittest.TestCase):
 # ---------- fake §4 server for the client loop ----------
 
 class FakeServer:
-    def __init__(self, specs):
+    def __init__(self, specs, auto_accept=True):
+        self.auto_accept = auto_accept  # False: submits wait for /api/tasks/{id}/review
         self.lock = threading.Lock()
         self.state = "active"
         self.workers = {}
@@ -205,15 +206,34 @@ class FakeServer:
                 self.wfile.write(data)
 
             def do_GET(self):
-                if self.path == "/api/tasks":
-                    with fake.lock:
-                        return self._send(200, {"tasks": fake.tasks})
+                path, _, query = self.path.partition("?")
+                with fake.lock:
+                    if path == "/api/tasks":
+                        want = query[len("state="):] if query.startswith("state=") else None
+                        return self._send(200, {"tasks": [t for t in fake.tasks
+                                                          if not want or t["state"] == want]})
+                    if path == "/api/project":
+                        return self._send(200, {"project": {"id": "p", "goal": "test goal",
+                                                            "state": fake.state}})
                 self._send(404, {"error": "not found"})
 
             def do_POST(self):
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n) or b"{}")
                 parts = self.path.split("?")[0].strip("/").split("/")
+                if parts == ["api", "project", "state"]:
+                    fake.state = body["state"]
+                    return self._send(200, {"project": {"state": fake.state}})
+                if parts[:2] == ["api", "tasks"] and parts[-1] == "review":
+                    with fake.lock:
+                        t = next(t for t in fake.tasks if t["id"] == parts[2])
+                        t["state"], t["review_note"] = body["decision"], body.get("note", "")
+                        if body.get("followup_instruction"):
+                            fake.tasks.append({**t, "id": f"t_{len(fake.tasks) + 1}",
+                                               "seq": len(fake.tasks) + 1, "state": "queued",
+                                               "title": "Redo: " + t["title"], "result": "",
+                                               "instruction": body["followup_instruction"]})
+                    return self._send(200, {"task": t})
                 if parts == ["api", "worker", "register"]:
                     wid = f"{body['owner'].lower()}-{len(fake.workers)}"
                     fake.workers[wid] = body
@@ -240,9 +260,9 @@ class FakeServer:
                     if action == "submit":
                         t = next(t for t in fake.tasks if t["id"] == body["task_id"])
                         fake.submissions.append((wid, body))
-                        # auto-accept, like the server would via orchestrator.review
-                        t["state"], t["result"] = "accepted", body["output"]
-                        if all(x["state"] == "accepted" for x in fake.tasks):
+                        t["result"] = body["output"]
+                        t["state"] = "accepted" if fake.auto_accept else "submitted"
+                        if fake.auto_accept and all(x["state"] == "accepted" for x in fake.tasks):
                             fake.state = "done"
                         return self._send(200, {"ok": True, "task_state": "submitted"})
                     fake.workers.pop(wid)
@@ -302,6 +322,53 @@ class ClientLoopTests(unittest.TestCase):
             self.assertNotIn("sk-secret", json.dumps(fake.submissions))
         finally:
             fake.close()
+
+
+class LeadAgentTests(unittest.TestCase):
+    def tearDown(self):
+        lead_ai._lead = None
+
+    def test_workers_plus_lead_agent_drive_project_to_done(self):
+        use_lead(lead_ai.LeadAI("mock"))
+        fake = FakeServer(orchestrator._template_plan("g"), auto_accept=False)
+        try:
+            stop = threading.Event()
+            lead_thread = threading.Thread(target=lead_agent.run, kwargs=dict(
+                client=agent_client.ConsortiumClient(fake.url, timeout=5), poll=0.05,
+                auto_done=True, log=lambda m: None, stop_event=stop))
+            workers = [threading.Thread(target=agent_client.run_loop, kwargs=dict(
+                client=agent_client.ConsortiumClient(fake.url, timeout=5), owner=n,
+                provider="mock", poll=0.05, log=lambda m: None, stop_event=stop))
+                for n in ("Alice", "Bob")]
+            for t in [lead_thread, *workers]:
+                t.start()
+            lead_thread.join(timeout=20)
+            for t in workers:
+                t.join(timeout=5)
+            stop.set()
+            self.assertEqual(fake.state, "done")
+            self.assertTrue(all(t["state"] == "accepted" for t in fake.tasks))
+        finally:
+            fake.close()
+
+    def test_rejection_posts_followup(self):
+        fake = FakeServer([{"title": "Hero", "instruction": "Build #hero", "depends_on": []}],
+                          auto_accept=False)
+        try:
+            fake.tasks[0].update(state="submitted", result="   ")  # empty -> rejected
+            c = agent_client.ConsortiumClient(fake.url, timeout=5)
+            self.assertEqual(lead_agent.review_pending(c, log=lambda m: None), 1)
+            self.assertEqual(fake.tasks[0]["state"], "rejected")
+            self.assertEqual(fake.tasks[1]["state"], "queued")
+            self.assertIn("Build #hero", fake.tasks[1]["instruction"])
+            self.assertEqual(lead_agent.review_pending(c, log=lambda m: None), 0)
+        finally:
+            fake.close()
+
+    def test_all_accepted(self):
+        self.assertFalse(lead_agent.all_accepted([]))
+        self.assertFalse(lead_agent.all_accepted([{"state": "accepted"}, {"state": "queued"}]))
+        self.assertTrue(lead_agent.all_accepted([{"state": "rejected"}, {"state": "accepted"}]))
 
 
 if __name__ == "__main__":

@@ -27,6 +27,15 @@ from lead import orchestrator, lead_ai
    fix: when a follow-up is created, replace the rejected id with the follow-up id
    in the `depends_on` of every queued task.
 
+## Auto-review: `python -m lead.lead_agent --server http://127.0.0.1:8000 [--auto-done]`
+
+Right now nothing reviews submitted tasks unless the leader does it by hand. That means
+dependent tasks (like the final integration task) never unblock. `lead/lead_agent.py`
+is the Lead AI acting on the leader's behalf, and it only uses the §4 API: it polls
+`GET /api/tasks?state=submitted`, runs `orchestrator.review`, and posts
+`/api/tasks/{id}/review`. I verified it live against `python -m server.app`. If you
+would rather review inside the server on `/submit`, call `lead_facade.review` there instead.
+
 ## Other useful hooks
 
 - `lead_ai.configure(provider, api_key, model)` swaps the Lead AI at runtime, e.g. when
