@@ -22,10 +22,14 @@ from lead import orchestrator, lead_ai
    deps = [created[d].id if isinstance(d, int) and 0 <= d < len(created) else d
            for d in spec.get("depends_on") or []]
    ```
-2. **A rejected task blocks its dependents forever.** `_deps_satisfied` requires
-   ACCEPTED, but after a rejection the work is redone in a new follow-up task. One
-   fix: when a follow-up is created, replace the rejected id with the follow-up id
-   in the `depends_on` of every queued task.
+2. **STILL OPEN (checked 14:10 on 7f387af): a rejected task blocks its dependents
+   forever.** `_deps_satisfied` requires ACCEPTED, but after a rejection the work is
+   redone in a new follow-up task. Repro on the real `Store`:
+   plan A, then B with depends_on=[A]. Reject A with a follow-up (t_03), then accept t_03.
+   `claim_next` keeps returning `{'task': None, 'wait': True}`, and the final state is
+   `t_01 rejected, t_02 queued ['t_01'], t_03 accepted`.
+   Fix in `Store.review`: when the follow-up is created, rewrite every task whose
+   `depends_on` contains `task_id` to point at `fid` instead.
 
 ## Auto-review: `python -m lead.lead_agent --server http://127.0.0.1:8000 [--auto-done]`
 
