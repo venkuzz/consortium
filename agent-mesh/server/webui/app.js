@@ -117,7 +117,15 @@ function renderDetail() {
 }
 $('goal').addEventListener('input', renderControls);
 $('create').addEventListener('click', async () => { try { await mutate('/api/project', { goal: $('goal').value.trim() }, 'Project created.'); } catch {} });
-$('plan').addEventListener('click', async () => { try { const data = await mutate('/api/project/plan', {}, 'Lead AI planned the work.'); if (data?.note) log(data.note); } catch {} });
+$('plan').addEventListener('click', async () => {
+  const lead = {};
+  const lp = $('lead-provider')?.value.trim();
+  if (lp) lead.lead_provider = lp;
+  const lk = $('lead-key')?.value.trim(); if (lk) lead.lead_api_key = lk;
+  const lm = $('lead-model')?.value.trim(); if (lm) lead.lead_model = lm;
+  const lb = $('lead-base-url')?.value.trim(); if (lb) lead.lead_base_url = lb;
+  try { const data = await mutate('/api/project/plan', lead, 'Lead AI planned the work.'); if (data?.note) log(data.note); if ($('lead-key')) $('lead-key').value = ''; } catch {} });
+$('lead-provider')?.addEventListener('change', () => { const show = $('lead-provider').value === 'custom'; if ($('lead-base-url')) $('lead-base-url').hidden = !show; });
 $('pause').addEventListener('click', async () => { const next = state.project?.state === 'paused' ? 'active' : 'paused'; try { await mutate('/api/project/state', { state: next }, `Project ${next === 'active' ? 'resumed' : 'paused'}.`); } catch {} });
 $('done').addEventListener('click', async () => { if (!confirm('Mark this project done? Workers will stop claiming tasks. This cannot be resumed.')) return; try { await mutate('/api/project/state', { state: 'done' }, 'Project marked done.'); } catch {} });
 $('new-project').addEventListener('click', () => { if (!confirm('Start a new project? Creating it will replace the current project and clear its tasks.')) return; $('goal-section').hidden = false; $('goal').value = ''; $('goal').focus(); $('goal-help').textContent = 'Creating this project will clear the previous task list.'; renderControls(); });

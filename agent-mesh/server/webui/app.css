@@ -916,3 +916,9 @@ dialog .button { width: 100%; margin-top: 20px; }
   }
   .orbit-particle, .kernel-heart, .queue-packet, .cube-packets { display: none; }
 }
+
+/* Leader's AI picker inside the plan bar */
+.lead-config { margin-top: 10px; }
+.lead-config summary { cursor: pointer; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.lead-config-fields { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0 4px; }
+.lead-config-fields select, .lead-config-fields input { flex: 1; min-width: 140px; padding: 7px 9px; font-size: 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface, #0b0e13); color: inherit; }

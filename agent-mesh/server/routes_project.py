@@ -34,7 +34,7 @@ def create_project(store, body, params):
     return 200, {"project": proj.to_dict()}
 
 
-# POST /api/project/plan   {} or {goal}
+# POST /api/project/plan   {} or {goal, lead_provider?, lead_api_key?, lead_model?, lead_base_url?}
 def plan_project(store, body, params):
     proj = store.get_project()
     if not proj:
@@ -43,6 +43,19 @@ def plan_project(store, body, params):
     if body.get("goal"):
         # allow overriding the stored goal
         proj.goal = goal
+
+    # Let the leader choose/supply their AI for this plan (optional). A blank
+    # provider/key falls back to the server's env-configured Lead AI, which
+    # falls back to the deterministic template — so /plan always works.
+    lead_note = ""
+    if any(body.get(k) for k in ("lead_provider", "lead_api_key", "lead_model", "lead_base_url")):
+        cfg = lead_facade.configure_lead(
+            provider=(body.get("lead_provider") or "").strip() or None,
+            api_key=(body.get("lead_api_key") or "").strip() or None,
+            model=(body.get("lead_model") or "").strip() or None,
+            base_url=(body.get("lead_base_url") or "").strip() or None,
+        )
+        lead_note = cfg.get("note", "")
 
     result = lead_facade.plan(goal)
     specs = result.get("tasks", [])
@@ -63,7 +76,7 @@ def plan_project(store, body, params):
         "project": store.get_project().to_dict(),
         "tasks": [t.to_dict() for t in tasks],
         "used_llm": result.get("used_llm", False),
-        "note": result.get("note", ""),
+        "note": (lead_note + " " if lead_note else "") + result.get("note", ""),
     }
 
 
