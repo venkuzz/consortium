@@ -89,6 +89,19 @@ def run():
         assert s == 200 and rev["task"]["state"] == "accepted"
         print("  register/next/submit/review round-trip OK")
 
+        # 2b. final artifact and portable project record
+        s, ct, raw = _get("/api/project/export?format=artifact")
+        exported = json.loads(raw)
+        assert s == 200 and "application/json" in ct
+        assert exported["content"] == "<x/>" and exported["source_task"]["id"] == tid
+        assert exported["filename"].startswith("build-a-landing-page.")
+        s, _, raw = _get("/api/project/export?format=record")
+        record_export = json.loads(raw)
+        record = json.loads(record_export["content"])
+        assert record["schema"] == "consortium.project.v1"
+        assert record["final_task_id"] == tid
+        print("  artifact + project-record exports OK")
+
         # 3. SSE snapshot shape (read just the first frame)
         with urllib.request.urlopen(BASE + "/api/events", timeout=5) as r:
             buf = b""

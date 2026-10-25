@@ -4,7 +4,8 @@ Consortium server — Agent A (WORK_SPLIT.md §4, §5 Phase 1).
 Zero-dependency stdlib HTTP server. The leader runs this; teammates open the
 LAN URL. Implements every endpoint in §4:
 
-  GET  /api/project                     GET  /api/tasks
+  GET  /api/project                     GET  /api/project/export
+  GET  /api/tasks
   POST /api/project                     POST /api/tasks
   POST /api/project/plan                POST /api/tasks/{id}/review
   POST /api/project/state
@@ -93,6 +94,7 @@ def _health_payload() -> dict:
 # Path params use named groups, e.g. (?P<id>[^/]+).
 _ROUTES = [
     ("GET",  r"^/api/project$",                 rp.get_project),
+    ("GET",  r"^/api/project/export$",          rp.export_project),
     ("POST", r"^/api/project$",                 rp.create_project),
     ("POST", r"^/api/project/plan$",            rp.plan_project),
     ("POST", r"^/api/project/state$",           rp.set_state),

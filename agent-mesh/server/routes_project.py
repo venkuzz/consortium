@@ -7,6 +7,10 @@ store so they're trivially testable; app.py maps URLs to them.
 """
 from __future__ import annotations
 
+import json
+import re
+import time
+
 from core.state import ACTIVE, DONE, PLANNING, ACCEPTED, REJECTED
 from core.lifecycle import TransitionError
 from . import lead_facade
@@ -23,6 +27,121 @@ def _project_payload(store) -> dict:
 # GET /api/project
 def get_project(store, body, params):
     return 200, _project_payload(store)
+
+
+def _slug(value: str) -> str:
+    """Turn a project goal into a short, portable filename stem."""
+    stem = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return (stem[:60].rstrip("-") or "consortium-result")
+
+
+def _strip_outer_fence(value: str) -> str:
+    """Remove one Markdown code fence without changing the deliverable inside."""
+    text = value.strip()
+    match = re.fullmatch(r"```[^\n]*\n([\s\S]*?)\n?```", text)
+    return match.group(1).strip() if match else text
+
+
+def _artifact_type(content: str) -> tuple[str, str]:
+    """Infer a useful extension and MIME type from a worker's final output."""
+    sample = content.lstrip()
+    lowered = sample[:1000].lower()
+    if ("<!doctype html" in lowered or "<html" in lowered or
+            ("<head" in lowered and "<body" in lowered) or
+            re.match(r"<[a-z][\w-]*(?:\s|>)", sample, re.I)):
+        return ".html", "text/html;charset=utf-8"
+    if sample.startswith(("{", "[")):
+        try:
+            json.loads(sample)
+            return ".json", "application/json;charset=utf-8"
+        except json.JSONDecodeError:
+            pass
+    if re.search(r"(^|\n)\s*(const|let|var|function|export|import)\s", sample):
+        return ".js", "text/javascript;charset=utf-8"
+    if ("{" in sample and "}" in sample and
+            re.search(r"(^|\n)\s*([.#][\w-]+|[a-z][\w-]*)[^\n{]*\{", sample, re.I)):
+        return ".css", "text/css;charset=utf-8"
+    if re.search(r"(^|\n)\s*(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```)", sample):
+        return ".md", "text/markdown;charset=utf-8"
+    return ".txt", "text/plain;charset=utf-8"
+
+
+def _final_task(tasks):
+    """Choose the accepted output most likely to be the integrated deliverable."""
+    candidates = [task for task in tasks
+                  if task.state == ACCEPTED and (task.result or "").strip()]
+    if not candidates:
+        return None
+    dependency_ids = {dep for task in tasks for dep in task.depends_on}
+    final_words = re.compile(
+        r"\b(final|integrat(?:e|ed|ion)|assembl(?:e|ed|y)|complete|deliverable|ship|build)\b",
+        re.I,
+    )
+
+    def score(task):
+        # Integration wording and leaf position are stronger signals than raw
+        # task order; dependency count breaks ties in favor of aggregator work.
+        return (
+            100 if final_words.search(task.title) else 0,
+            30 if task.id not in dependency_ids else 0,
+            len(task.depends_on) * 10,
+            task.seq,
+        )
+
+    return max(candidates, key=score)
+
+
+# GET /api/project/export?format=artifact|record
+def export_project(store, body, params):
+    project = store.get_project()
+    if not project:
+        return 404, {"error": "Create a project before exporting."}
+
+    export_format = (params.get("format") or "artifact").strip().lower()
+    if export_format not in ("artifact", "record"):
+        return 400, {"error": "format must be 'artifact' or 'record'"}
+
+    tasks = store.list_tasks()
+    final_task = _final_task(tasks)
+    stem = _slug(project.goal)
+
+    if export_format == "record":
+        record = {
+            "schema": "consortium.project.v1",
+            "exported_at": round(time.time(), 3),
+            "project": project.to_dict(),
+            "stats": store.stats(),
+            "tasks": [task.to_dict() for task in tasks],
+            "final_task_id": final_task.id if final_task else None,
+        }
+        return 200, {
+            "filename": f"{stem}-consortium.json",
+            "mime_type": "application/json;charset=utf-8",
+            "content": json.dumps(record, indent=2, ensure_ascii=False),
+            "source_task": final_task.to_dict() if final_task else None,
+            "accepted_count": sum(task.state == ACCEPTED for task in tasks),
+            "total_tasks": len(tasks),
+        }
+
+    if not final_task:
+        return 409, {
+            "error": "Accept at least one task result before exporting the final result."
+        }
+
+    content = _strip_outer_fence(final_task.result)
+    extension, mime_type = _artifact_type(content)
+    return 200, {
+        "filename": f"{stem}{extension}",
+        "mime_type": mime_type,
+        "content": content,
+        "source_task": {
+            "id": final_task.id,
+            "title": final_task.title,
+            "seq": final_task.seq,
+        },
+        "accepted_count": sum(task.state == ACCEPTED for task in tasks),
+        "total_tasks": len(tasks),
+    }
 
 
 # POST /api/project   {goal}

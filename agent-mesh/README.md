@@ -174,6 +174,19 @@ curl -X POST http://localhost:8000/api/project/plan -d '{}'
 curl http://localhost:8000/api/tasks
 ```
 
+After accepting a worker result, the workspace’s **Export result** action previews
+and downloads the strongest final or integrated deliverable. The backend also
+provides both export payloads directly:
+
+```bash
+curl 'http://localhost:8000/api/project/export?format=artifact'
+curl 'http://localhost:8000/api/project/export?format=record'
+```
+
+`artifact` infers a useful filename and file type from the accepted result.
+`record` returns a portable JSON history with the project, tasks, reviews, and
+the selected final task.
+
 The frontend lives in `server/webui/`. The live event stream is
 `GET /api/events`.
 
@@ -186,6 +199,7 @@ python -m tests.test_store
 python -m tests.test_server_routes
 python -m tests.test_e2e
 python -m tests.test_webui_serving
+python -m tests.test_export
 python -m tests.test_cli_provider
 python -m tests.test_assignment
 python -m tests.test_orchestrator
