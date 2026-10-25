@@ -160,6 +160,47 @@ $('assign-btn').addEventListener('click', async () => {
   try { await mutate(`/api/tasks/${encodeURIComponent(task.id)}/assign`, { worker_id }, `${task.title}: assigned to ${name}.`); }
   catch {}
 });
+function shellQuote(s) { return `"${String(s).replace(/(["\\$`])/g, '\\$1')}"`; }
+function cliCommandFor(workerId, owner, cliCmd) {
+  const server = location.origin;
+  return [
+    'cd agent-mesh',
+    `python worker/agent_client.py --server ${shellQuote(server)} ` +
+    `--owner ${shellQuote(owner)} --provider cli --cli-cmd ${shellQuote(cliCmd)} ` +
+    `--worker-id ${shellQuote(workerId)}`
+  ].join('\n');
+}
+$('connect-cli-btn').addEventListener('click', () => {
+  const task = selectedTask(); if (!task) return;
+  if (demo) { toast('Connect CLI needs the live backend, not the sample workspace.'); return; }
+  $('cli-error').textContent = ''; $('cli-status').textContent = '';
+  $('cli-command-box').hidden = true; $('cli-generated').value = '';
+  // Prefill name from an existing CLI worker pinned to this task, if any.
+  const pinned = state.workers.find(w => w.id === task.assignee);
+  $('cli-owner').value = pinned?.owner || pinned?.display || '';
+  $('cli-dialog').showModal(); $('cli-owner').focus();
+});
+$('cli-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const task = selectedTask(); if (!task) return;
+  const owner = $('cli-owner').value.trim(); const cliCmd = $('cli-command').value.trim() || 'claude -p';
+  if (!owner) { $('cli-error').textContent = 'Enter the teammate\u2019s name.'; return; }
+  $('cli-error').textContent = ''; $('cli-status').textContent = 'Reserving a worker slot\u2026';
+  try {
+    // 1. Pre-create a CLI worker slot the teammate's client will adopt.
+    const reg = await request('/api/worker/register', { owner, provider: 'cli', room_code: $('room-code').value.trim() });
+    const wid = reg.worker.id;
+    // 2. Pin this task to that slot so the CLI pulls exactly what you assigned.
+    await request(`/api/tasks/${encodeURIComponent(task.id)}/assign`, { worker_id: wid });
+    await sync();
+    // 3. Show the exact command for the teammate to run.
+    $('cli-generated').value = cliCommandFor(wid, owner, cliCmd);
+    $('cli-command-box').hidden = false;
+    $('cli-status').textContent = `Task pinned to ${reg.worker.display}. Send them this command \u2014 their CLI will pick up the task automatically.`;
+    log(`Reserved CLI worker for ${owner} and pinned "${task.title}".`);
+  } catch (error) { $('cli-status').textContent = ''; $('cli-error').textContent = error.message; }
+});
+$('cli-copy').addEventListener('click', () => copy($('cli-generated').value));
 $('preview-output').addEventListener('click', () => { const frame = $('output-frame'); frame.hidden = !frame.hidden; if (!frame.hidden) frame.srcdoc = selectedTask()?.result || ''; });
 $('invite').addEventListener('click', () => { $('invite-address').value = location.origin + location.pathname; $('invite-help').textContent = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) ? 'For another laptop, replace localhost with the host’s LAN IP, keeping the port. Both devices must be on the same network. Use the backend server address, not the standalone demo.' : 'Share this address with teammates on the host’s network. The prototype uses a shared room without sign-in.'; $('invite-dialog').showModal(); });
 $('copy-address').addEventListener('click', () => copy($('invite-address').value));

@@ -117,6 +117,31 @@ def test_other_workers_wait_when_only_pinned_tasks_remain():
     print("  non-assignee waits while only others' pinned tasks remain OK")
 
 
+def test_connect_cli_adopt_worker_id():
+    """The 'Connect CLI' flow: leader pre-registers a cli worker slot and pins a
+    task to it; the teammate's client ADOPTS that same worker_id and pulls the
+    pinned task (not a fresh duplicate worker)."""
+    s = _active_store()
+    # 1. Leader pre-creates the slot (as the browser does via register).
+    slot = s.register_worker("Bob", "cli")
+    wid = slot.id
+    # 2. Pin a task to that slot.
+    t = s.add_task("Bob's CLI task", "do it")
+    s.assign_task(t.id, wid)
+    workers_before = len(s.list_workers())
+    # 3. The CLI client adopts the SAME id (no duplicate worker created).
+    adopted = s.register_worker("Bob", "cli", worker_id=wid)
+    assert adopted.id == wid, "adoption created a different id"
+    assert len(s.list_workers()) == workers_before, "adoption duplicated the worker"
+    # 4. That worker pulls and gets exactly its pinned task.
+    r = s.claim_next(wid)
+    assert r["task"] and r["task"]["id"] == t.id, "adopted CLI worker didn't get its task"
+    # A brand-new id instead would create a separate worker and miss the pin:
+    other = s.register_worker("Bob", "cli", worker_id="bob-cli-zzzz")
+    assert other.id == "bob-cli-zzzz"
+    print("  Connect-CLI worker-id adoption OK")
+
+
 if __name__ == "__main__":
     print("=== task assignment tests ===")
     test_pinned_task_goes_to_assignee_only()
@@ -125,4 +150,5 @@ if __name__ == "__main__":
     test_pin_releases_when_worker_leaves()
     test_pin_releases_when_worker_goes_stale()
     test_other_workers_wait_when_only_pinned_tasks_remain()
+    test_connect_cli_adopt_worker_id()
     print("ALL ASSIGNMENT TESTS PASSED")

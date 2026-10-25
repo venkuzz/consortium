@@ -59,12 +59,14 @@ class ConsortiumClient:
                 msg = raw
             raise ServerError(e.code, str(msg)[:300])
 
-    def register(self, owner, provider, model=None, room_code=None) -> dict:
+    def register(self, owner, provider, model=None, room_code=None, worker_id=None) -> dict:
         body = {"owner": owner, "provider": provider}
         if model:
             body["model"] = model
         if room_code:
             body["room_code"] = room_code
+        if worker_id:
+            body["worker_id"] = worker_id
         return self._call("POST", "/api/worker/register", body)
 
     def heartbeat(self, wid) -> dict:
@@ -120,12 +122,12 @@ class Heartbeat(threading.Thread):
 def run_loop(client: ConsortiumClient, owner: str, provider: str, api_key=None, model=None,
              room_code=None, poll: float = 2.0, long_poll: int = 0, max_tasks: int = 0,
              log=print, stop_event: Optional[threading.Event] = None,
-             base_url=None, cli_cmd=None) -> int:
+             base_url=None, cli_cmd=None, worker_id=None) -> int:
     """Register, then claim -> execute -> submit until the project is done.
 
     Returns the number of tasks completed. `max_tasks`/`stop_event` exist for tests."""
     stop_event = stop_event or threading.Event()
-    reg = client.register(owner, provider, model, room_code)
+    reg = client.register(owner, provider, model, room_code, worker_id)
     wid = client.worker_id = reg["worker"]["id"]
     log(f"registered as {reg['worker'].get('display', wid)} ({wid}); "
         f"project is {reg.get('project_state')}")
@@ -141,7 +143,7 @@ def run_loop(client: ConsortiumClient, owner: str, provider: str, api_key=None, 
                 if e.status == 404:  # server forgot us (restart?) -> re-register
                     log("worker unknown to server; re-registering")
                     wid = client.worker_id = \
-                        client.register(owner, provider, model, room_code)["worker"]["id"]
+                        client.register(owner, provider, model, room_code, worker_id)["worker"]["id"]
                     hb.wid = wid
                     continue
                 log(f"server error: {e}; retrying in {backoff:.0f}s")
@@ -206,6 +208,9 @@ def main(argv=None):
                          "Instruction is piped to stdin (or substituted for {prompt}); "
                          "stdout is the result. e.g. 'claude -p' or 'aider --message-file -'")
     ap.add_argument("--room-code", default=None)
+    ap.add_argument("--worker-id", default=None,
+                    help="adopt a worker slot the leader pre-created (from the "
+                         "'Connect CLI' button) so tasks pinned to it reach you")
     ap.add_argument("--poll", type=float, default=2.0, help="seconds between polls when idle")
     ap.add_argument("--long-poll", type=int, default=0, help="ask server to hold /next up to N s")
     args = ap.parse_args(argv)
@@ -224,7 +229,7 @@ def main(argv=None):
     try:
         n = run_loop(client, args.owner, args.provider, args.api_key, args.model,
                      args.room_code, args.poll, args.long_poll, log=log,
-                     base_url=args.base_url, cli_cmd=args.cli_cmd)
+                     base_url=args.base_url, cli_cmd=args.cli_cmd, worker_id=args.worker_id)
         log(f"finished: {n} task(s) completed")
     except KeyboardInterrupt:
         log("interrupted; unregistering (in-flight task will be requeued)")

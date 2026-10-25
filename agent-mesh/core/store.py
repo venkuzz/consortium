@@ -226,15 +226,32 @@ class Store:
     # ── worker registry ────────────────────────────────────────────────────
     def register_worker(self, owner: str, provider: str,
                         api_key: Optional[str] = None,
-                        model: Optional[str] = None) -> Worker:
+                        model: Optional[str] = None,
+                        worker_id: Optional[str] = None) -> Worker:
+        """Register a worker. If `worker_id` is given and already exists, ADOPT
+        it (refresh/reactivate) instead of making a new one — this lets a CLI
+        client attach to a slot the leader pre-created via "Connect CLI", so
+        tasks pinned to that id reach the CLI. If the id is given but unknown,
+        we create the worker with that exact id."""
         with self._lock:
-            wid = f"{owner.lower().replace(' ', '-')}-{provider}-{uuid.uuid4().hex[:4]}"
-            display = f"{owner}'s {PROVIDER_LABELS.get(provider, provider)}"
-            w = Worker(id=wid, owner=owner, provider=provider, display=display,
-                       status=IDLE, last_seen=now(), current_task_id=None)
-            self._workers[wid] = w
-            snap = w.to_dict()
-        self._broadcast("worker_joined", {"worker": snap})
+            if worker_id and worker_id in self._workers:
+                w = self._workers[worker_id]
+                w.last_seen = now()
+                if w.status == OFFLINE:
+                    w.status = IDLE
+                snap = w.to_dict()
+                reused = True
+            else:
+                wid = worker_id or \
+                    f"{owner.lower().replace(' ', '-')}-{provider}-{uuid.uuid4().hex[:4]}"
+                display = f"{owner}'s {PROVIDER_LABELS.get(provider, provider)}"
+                w = Worker(id=wid, owner=owner, provider=provider, display=display,
+                           status=IDLE, last_seen=now(), current_task_id=None)
+                self._workers[wid] = w
+                snap = w.to_dict()
+                reused = False
+        if not reused:
+            self._broadcast("worker_joined", {"worker": snap})
         return w
 
     def heartbeat(self, worker_id: str) -> Optional[Worker]:
