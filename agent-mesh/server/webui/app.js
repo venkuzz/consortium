@@ -1,431 +1,153 @@
-/* Consortium Mission Control — vanilla JS, zero deps.
- * Codes against WORK_SPLIT.md §4 only (HTTP + SSE).
- *
- * Architecture:
- *   - STATE mirrors the server snapshot; SSE events mutate it incrementally.
- *   - render*() functions paint the DOM decks from STATE.
- *   - The canvas constellation is an independent physics loop reading STATE:
- *       Lead core (center)  ·  worker nodes (orbiting)  ·  task nodes (ring)
- *       edges = task dependencies  ·  pulses = live claim/submit/review events.
- */
-(() => {
-"use strict";
-
-// ───────────────────────── state ─────────────────────────
-const STATE = {
-  project: null,
-  tasks: new Map(),      // id -> task
-  workers: new Map(),    // id -> worker
-  stats: {},
-  myWorkerId: null,
-};
-const STATE_COLORS = {
-  queued:"#8793a9", assigned:"#5b9dff", submitted:"#ffb454",
-  accepted:"#3ecf8e", rejected:"#ff6b6b",
-};
-
-const $ = (s) => document.querySelector(s);
-const api = async (method, path, body) => {
-  const opt = { method, headers: {} };
-  if (body !== undefined) { opt.headers["content-type"] = "application/json"; opt.body = JSON.stringify(body); }
-  const res = await fetch(path, opt);
-  let data = null; try { data = await res.json(); } catch {}
-  if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
-  return data;
-};
-
-// ───────────────────────── SSE wiring ─────────────────────────
-let es = null;
-function connect() {
-  es = new EventSource("/api/events");
-  const dot = $("#conn-dot"), txt = $("#conn-text");
-  es.onopen = () => { dot.className = "conn-dot live"; txt.textContent = "live"; };
-  es.onerror = () => {
-    dot.className = "conn-dot down"; txt.textContent = "reconnecting…";
-    // EventSource auto-reconnects; it will re-send a snapshot on reopen.
-  };
-  const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
-
-  on("snapshot", (d) => {
-    STATE.project = d.project;
-    STATE.tasks = new Map((d.tasks||[]).map(t => [t.id, t]));
-    STATE.workers = new Map((d.workers||[]).map(w => [w.id, w]));
-    STATE.stats = d.stats || {};
-    renderAll();
-    sim.sync();
-  });
-  on("project_state", (d) => {
-    if (STATE.project) { STATE.project.state = d.state; STATE.project.summary = d.summary; }
-    renderPhase(); renderCounters(); tick(`phase → <b>${d.state}</b>`, "ok");
-  });
-  on("tasks_planned", (d) => {
-    (d.tasks||[]).forEach(t => STATE.tasks.set(t.id, t));
-    renderCounters(); sim.sync();
-    tick(`lead planned <b>${(d.tasks||[]).length}</b> tasks`, "ok");
-  });
-  on("task_created", (d) => { STATE.tasks.set(d.task.id, d.task); renderCounters(); sim.sync(); });
-  on("task_claimed", (d) => {
-    const t = STATE.tasks.get(d.task_id); if (t){ t.state="assigned"; t.assigned_to=d.worker_id; }
-    const w = STATE.workers.get(d.worker_id); if (w){ w.status="working"; w.current_task_id=d.task_id; }
-    renderCounters(); renderRoster(); sim.pulse(d.worker_id, d.task_id, "#5b9dff");
-    tick(`${who(d.worker_id)} claimed <b>${shortTitle(d.task_id)}</b>`);
-  });
-  on("task_submitted", (d) => {
-    const t = STATE.tasks.get(d.task_id); if (t) t.state="submitted";
-    const w = STATE.workers.get(d.worker_id); if (w){ w.status="idle"; w.current_task_id=null; }
-    renderCounters(); renderRoster(); renderReviewQueue();
-    sim.pulse(d.task_id, d.worker_id, d.ok ? "#ffb454" : "#ff6b6b");
-    tick(`${who(d.worker_id)} submitted <b>${shortTitle(d.task_id)}</b>`, d.ok?"warn":"err");
-  });
-  on("task_reviewed", (d) => {
-    const t = STATE.tasks.get(d.task_id); if (t){ t.state=d.decision; t.review_note=d.note||""; }
-    renderCounters(); renderReviewQueue(); sim.sync();
-    const good = d.decision === "accepted";
-    sim.burst(d.task_id, good ? "#3ecf8e" : "#ff6b6b");
-    tick(`lead <b>${d.decision}</b> ${shortTitle(d.task_id)}`, good?"ok":"err");
-    refreshInspectorIf(d.task_id);
-  });
-  on("worker_joined", (d) => { STATE.workers.set(d.worker.id, d.worker); renderRoster(); sim.sync(); tick(`<b>${d.worker.display}</b> joined the mesh`, "ok"); });
-  on("worker_left", (d) => { const w=STATE.workers.get(d.worker_id); STATE.workers.delete(d.worker_id); renderRoster(); sim.sync(); if(w) tick(`${w.display} left`, "err"); });
-  on("done", (d) => { if(STATE.project) STATE.project.state="done"; renderPhase(); tick(`mission complete — <b>${d.summary||"done"}</b>`, "ok"); sim.celebrate(); });
+'use strict';
+const $ = id => document.getElementById(id);
+const demo = new URLSearchParams(location.search).get('demo') === '1';
+const state = { project: null, tasks: [], workers: [], filter: 'all', selected: null, busy: false, connected: demo, refreshing: false };
+const symbols = { queued: '○', assigned: '◐', submitted: '◈', accepted: '✓', rejected: '×' };
+const labels = { queued: 'Queued', assigned: 'In progress', submitted: 'Needs review', accepted: 'Accepted', rejected: 'Changes requested' };
+const sessionKey = `consortium-worker:${demo ? 'demo' : location.origin}`;
+let workerId = null, stream, toastTimer, sampleTimer, refreshAgain = false;
+try { workerId = demo ? null : sessionStorage.getItem(sessionKey); } catch {}
+function setWorker(id) { workerId = id; try { id ? sessionStorage.setItem(sessionKey, id) : sessionStorage.removeItem(sessionKey); } catch {} }
+function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6000); }
+function log(message) { const li = document.createElement('li'), time = document.createElement('time'), text = document.createElement('span'); time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); time.dateTime = new Date().toISOString(); text.textContent = message; li.append(time, text); $('events').prepend(li); while ($('events').children.length > 35) $('events').lastChild.remove(); }
+function element(tag, text, className) { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (className) el.className = className; return el; }
+function connection(ok) { state.connected = ok; $('connection').textContent = demo ? 'Sample workspace' : ok ? 'Connected' : 'Reconnecting'; $('connection').className = `connection ${demo ? 'demo' : ok ? 'online' : ''}`; $('event-status').textContent = demo ? 'Local sample events' : ok ? 'Live from the host' : 'Waiting for the backend'; }
+async function request(path, body) {
+  if (demo) return demoRequest(path, body);
+  const res = await fetch(path, { ...(body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), cache: 'no-store', signal: AbortSignal.timeout(path.endsWith('/plan') ? 180000 : 15000) });
+  if (!res.ok) { let message; try { message = (await res.json()).error; } catch {} throw new Error(message || `The server returned ${res.status}. Check the backend connection.`); }
+  return res.json();
 }
-const who = (id) => { const w=STATE.workers.get(id); return `<b>${w?w.display:id}</b>`; };
-const shortTitle = (id) => { const t=STATE.tasks.get(id); return t?t.title:id; };
-
-// ───────────────────────── render: phase + counters ─────────────────────────
-function renderAll(){ renderPhase(); renderCounters(); renderRoster(); renderReviewQueue(); fillGoal(); }
-function fillGoal(){ if (STATE.project && !$("#goal").value) $("#goal").value = STATE.project.goal || ""; }
-
-function renderPhase(){
-  const st = STATE.project ? STATE.project.state : "none";
-  const pill = $("#phase-pill"); pill.dataset.state = st;
-  $("#phase-label").textContent = STATE.project ? st : "no project";
-  const active = STATE.project && st === "active";
-  const paused = STATE.project && st === "paused";
-  const live = STATE.project && (st === "active" || st === "paused");
-  $("#btn-pause").disabled  = !active;
-  $("#btn-resume").disabled = !paused;
-  $("#btn-done").disabled   = !live;
-  $("#btn-addtask").disabled = !live;
+async function sync() {
+  if (demo) { render(); return; }
+  if (state.refreshing) { refreshAgain = true; return; }
+  state.refreshing = true;
+  try { const [p, t, w] = await Promise.all([request('/api/project'), request('/api/tasks'), request('/api/workers')]); state.project = p.project; state.tasks = t.tasks; state.workers = w.workers; connection(true); render(); }
+  catch (error) { connection(false); render(); }
+  finally { state.refreshing = false; if (refreshAgain) { refreshAgain = false; sync(); } }
 }
-function renderCounters(){
-  const s = STATE.stats || {};
-  ["queued","assigned","submitted","accepted","rejected"].forEach(k=>{
-    const el = $("#c-"+k); if(!el) return;
-    const n = countState(k);
-    if (el.textContent !== String(n)) {
-      el.textContent = n;
-      const c = el.closest(".counter"); c.classList.remove("bump"); void c.offsetWidth; c.classList.add("bump");
-    }
-  });
-  const online = [...STATE.workers.values()].filter(w=>w.status!=="offline").length;
-  STATE.stats.workers_online = online;
+async function mutate(path, body, success) {
+  if (state.busy) return null;
+  state.busy = true; renderControls();
+  try { const response = await request(path, body); await sync(); if (success) log(success); return response; }
+  catch (error) { toast(error.message); throw error; }
+  finally { state.busy = false; renderControls(); }
 }
-const countState = (k) => [...STATE.tasks.values()].filter(t=>t.state===k).length;
-
-function renderRoster(){
-  const el = $("#roster"), ws = [...STATE.workers.values()];
-  $("#roster-count").textContent = ws.length;
-  if (!ws.length){ el.innerHTML = '<div class="empty">No minds yet. Bring yours →</div>'; return; }
-  el.innerHTML = "";
-  ws.forEach(w=>{
-    const d = document.createElement("div"); d.className = "agent";
-    const col = providerColor(w.provider);
-    const me = w.id === STATE.myWorkerId ? " · you" : "";
-    d.innerHTML = `<span class="av" style="background:${col}">${(w.owner||w.display||"?")[0].toUpperCase()}</span>
-      <span class="meta"><b>${esc(w.display)}${me}</b><small>${w.provider}${w.current_task_id?" · "+esc(shortTitle(w.current_task_id)):""}</small></span>
-      <span class="wstat ${w.status}">${w.status}</span>`;
-    el.appendChild(d);
-  });
+function selectedTask() { return state.tasks.find(t => t.id === state.selected); }
+function renderControls() {
+  const unavailable = state.busy || !state.connected, project = state.project;
+  for (const id of ['create', 'join', 'plan', 'pause', 'done', 'add-task', 'claim', 'leave', 'new-project', 'sample-run']) $(id).disabled = unavailable;
+  $('create').disabled = unavailable || !$('goal').value.trim();
+  $('plan').textContent = state.busy ? 'Working…' : 'Plan tasks';
+  $('add-task').disabled = unavailable || !project || project.state === 'done';
+  $('claim').disabled = unavailable || project?.state !== 'active' || state.tasks.some(t => t.assigned_to === workerId && t.state === 'assigned');
+  $('sample-run').disabled = unavailable || project?.state !== 'active' || !state.tasks.some(t => t.state === 'queued');
+  $('new-project').hidden = !project; $('pause').hidden = !project || !['active', 'paused'].includes(project.state); $('done').hidden = !project || project.state === 'done';
+  $('pause').textContent = project?.state === 'paused' ? 'Resume' : 'Pause';
+  document.querySelectorAll('dialog button[type="submit"], #review-form button, #submit-form button').forEach(b => b.disabled = unavailable);
 }
-function renderReviewQueue(){
-  const el = $("#review-queue");
-  const subs = [...STATE.tasks.values()].filter(t=>t.state==="submitted").sort((a,b)=>a.seq-b.seq);
-  $("#review-count").textContent = subs.length;
-  if (!subs.length){ el.innerHTML = '<div class="empty">Nothing awaiting review.</div>'; return; }
-  el.innerHTML = "";
-  subs.forEach(t=>{
-    const c = document.createElement("div"); c.className="rev-card";
-    c.innerHTML = `<b>${esc(t.title)}</b><small>by ${esc((STATE.workers.get(t.assigned_to)||{}).display||t.assigned_to||"—")}</small>`;
-    c.onclick = () => openInspector(t.id);
-    el.appendChild(c);
-  });
+function render() {
+  const p = state.project;
+  $('project-state').textContent = p ? ({ planning: 'Planning', active: 'Project active', paused: 'Project paused', done: 'Project complete' }[p.state] || p.state) : 'No project';
+  $('project-title').textContent = p?.goal || 'Give the team a direction.';
+  $('project-summary').textContent = p?.summary || (p ? 'The lead sets the direction. Workers claim tasks and return results for review.' : 'Set a goal. Your lead AI will break it into work the team can share.');
+  $('goal-section').hidden = Boolean(p); $('plan-bar').hidden = p?.state !== 'planning';
+  const accepted = state.tasks.filter(t => t.state === 'accepted').length;
+  $('progress-text').textContent = state.tasks.length ? `${accepted} of ${state.tasks.length} tasks accepted` : 'No tasks yet'; $('progress-fill').style.width = `${state.tasks.length ? accepted / state.tasks.length * 100 : 0}%`;
+  $('task-count').textContent = state.tasks.length; $('review-count').textContent = state.tasks.filter(t => t.state === 'submitted').length;
+  renderWorkers(); renderTasks(); renderDetail(); renderControls();
 }
-
-// ───────────────────────── leader + worker actions ─────────────────────────
-$("#btn-create").onclick = async () => {
-  const goal = $("#goal").value.trim(); if(!goal) return note("#plan-note","enter a goal first");
-  try { await api("POST","/api/project",{goal}); note("#plan-note","goal set — ready to plan"); }
-  catch(e){ note("#plan-note","⚠ "+e.message); }
-};
-$("#btn-plan").onclick = async () => {
-  const goal = $("#goal").value.trim();
-  try {
-    if (!STATE.project) { if(!goal) return note("#plan-note","enter a goal first"); await api("POST","/api/project",{goal}); }
-    note("#plan-note","lead is planning…");
-    const r = await api("POST","/api/project/plan", goal?{goal}:{});
-    note("#plan-note", (r.used_llm?"🧠 ":"⚙ ")+(r.note||"planned"));
-  } catch(e){ note("#plan-note","⚠ "+e.message); }
-};
-$("#btn-pause").onclick  = () => setState("paused");
-$("#btn-resume").onclick = () => setState("active");
-$("#btn-done").onclick   = () => { if(confirm("Mark the mission done? Workers will stop pulling tasks.")) setState("done"); };
-async function setState(s){ try{ await api("POST","/api/project/state",{state:s}); }catch(e){ note("#plan-note","⚠ "+e.message);} }
-
-$("#btn-addtask").onclick = async () => {
-  const title=$("#t-title").value.trim(), instruction=$("#t-instruction").value.trim();
-  if(!title||!instruction) return;
-  try{ await api("POST","/api/tasks",{title,instruction}); $("#t-title").value=""; $("#t-instruction").value=""; }
-  catch(e){ note("#plan-note","⚠ "+e.message); }
-};
-
-$("#btn-join").onclick = async () => {
-  const owner=$("#w-owner").value.trim(), provider=$("#w-provider").value, api_key=$("#w-key").value.trim();
-  if(!owner) return note("#join-note","enter your name");
-  try{
-    const r = await api("POST","/api/worker/register",{owner,provider,api_key});
-    STATE.myWorkerId = r.worker.id; $("#w-key").value="";
-    note("#join-note",`joined as ${r.worker.display} ✦`);
-    startWorkerLoop(r.worker.id, provider, api_key);
-  }catch(e){ note("#join-note","⚠ "+e.message); }
-};
-
-/* Browser worker loop. For mock it generates output locally; for real
- * providers the key never leaves the browser — we call the provider directly
- * from here (best-effort), else fall back to a stub so the demo keeps flowing. */
-async function startWorkerLoop(wid, provider, key){
-  let stop = false;
-  const hb = setInterval(()=>api("POST",`/api/worker/${wid}/heartbeat`).catch(()=>{}), 5000);
-  async function loop(){
-    while(!stop){
-      let r;
-      try { r = await api("POST",`/api/worker/${wid}/next`); }
-      catch { await sleep(2500); continue; }
-      if (r.stop){ break; }
-      if (!r.task){ await sleep(2200); continue; }
-      const t0 = performance.now();
-      const output = await executeTask(provider, key, r.task, r.project);
-      const elapsed = +((performance.now()-t0)/1000).toFixed(2);
-      try { await api("POST",`/api/worker/${wid}/submit`,{task_id:r.task.id, output, ok:true, elapsed}); } catch {}
-    }
-    clearInterval(hb);
+function renderWorkers() {
+  $('workers').replaceChildren(); $('worker-count').textContent = state.workers.length; $('worker-empty').hidden = !!state.workers.length;
+  for (const w of state.workers) { const row = element('div', undefined, 'worker-row'), avatar = element('span', w.display.slice(0, 1).toUpperCase(), 'avatar'), text = element('div'); text.append(element('strong', w.display), element('small', `${w.provider} / ${w.status}`)); row.append(avatar, text, element('span', '', `worker-state ${w.status}`)); $('workers').append(row); }
+  const me = state.workers.find(w => w.id === workerId); $('worker-console').hidden = !me; $('my-worker').textContent = me ? `${me.display} (${me.status})` : '';
+  $('join').hidden = !!me;
+}
+function renderTasks() {
+  const tasks = state.tasks.filter(t => state.filter === 'all' || t.state === state.filter).sort((a, b) => a.seq - b.seq);
+  $('task-list').replaceChildren(); $('queue-empty').hidden = !!tasks.length;
+  $('queue-empty').querySelector('h3').textContent = state.tasks.length ? 'No tasks in this view.' : 'The work starts with a plan.';
+  $('queue-empty').querySelector('p').textContent = state.tasks.length ? 'Choose another filter to see the rest of the work.' : 'Create a project, then ask the lead AI to plan the tasks.';
+  for (const task of tasks) {
+    const row = element('button', undefined, `task-row ${task.id === state.selected ? 'selected' : ''}`); row.setAttribute('aria-pressed', String(task.id === state.selected));
+    const copy = element('span', undefined, 'task-copy'); copy.append(element('strong', task.title));
+    const worker = state.workers.find(w => w.id === task.assigned_to);
+    copy.append(element('small', `${labels[task.state] || task.state}${worker ? ` / ${worker.display}` : ''}`));
+    row.append(element('span', symbols[task.state] || '○', `task-symbol ${task.state}`), copy, element('span', `#${String(task.seq).padStart(2, '0')}`, 'task-number'));
+    row.addEventListener('click', () => { if (state.selected !== task.id) { $('review-note').value = ''; $('followup').value = ''; $('worker-output').value = ''; $('output-frame').hidden = true; $('output-frame').srcdoc = ''; } state.selected = task.id; renderTasks(); renderDetail(); }); $('task-list').append(row);
   }
-  loop();
 }
-async function executeTask(provider, key, task, project){
-  // Mock / no key: produce believable local output after a short "think".
-  await sleep(900 + Math.random()*1400);
-  return `<!-- ${task.title} · generated by a ${provider} worker -->\n`+
-         `<section id="${slug(task.title)}">\n  <!-- ${task.instruction.slice(0,120)} -->\n`+
-         `  <p>Deliverable for: ${esc(project?project.goal:"mission")}</p>\n</section>`;
+function renderDetail() {
+  const task = selectedTask(); $('detail-empty').hidden = !!task; $('task-detail').hidden = !task; if (!task) return;
+  $('detail-state').textContent = labels[task.state] || task.state; $('detail-state').className = `state-chip ${task.state}`; $('detail-seq').textContent = `Task ${task.seq}`;
+  $('detail-title').textContent = task.title; $('detail-instruction').textContent = task.instruction; $('detail-worker').textContent = state.workers.find(w => w.id === task.assigned_to)?.display || 'Available to a worker';
+  $('detail-deps').textContent = task.depends_on?.length ? `Depends on: ${task.depends_on.map(id => state.tasks.find(t => t.id === id)?.title || id).join(', ')}` : '';
+  $('output-section').hidden = !task.result; $('detail-output').textContent = task.result || ''; $('preview-output').hidden = !/<[a-z][\s\S]*>/i.test(task.result || '');
+  $('review-note-section').hidden = !task.review_note; $('detail-review').textContent = task.review_note || '';
+  $('review-form').hidden = task.state !== 'submitted' || state.project?.state === 'done';
+  $('submit-form').hidden = task.state !== 'assigned' || task.assigned_to !== workerId || state.project?.state === 'done';
 }
-
-// ───────────────────────── inspector ─────────────────────────
-let inspId = null;
-function openInspector(id){
-  const t = STATE.tasks.get(id); if(!t) return; inspId = id;
-  $("#insp-seq").textContent = "#"+t.seq;
-  $("#insp-title").textContent = t.title;
-  const sc = $("#insp-state"); sc.textContent = t.state; sc.dataset.s = t.state;
-  $("#insp-instruction").textContent = t.instruction || "—";
-  // deps
-  const depSec = $("#insp-deps-section"), depEl = $("#insp-deps");
-  if (t.depends_on && t.depends_on.length){
-    depSec.classList.remove("hidden"); depEl.innerHTML="";
-    t.depends_on.forEach(d=>{ const dep=STATE.tasks.get(d); const c=document.createElement("span");
-      c.className="dep-chip"; c.textContent=dep?dep.title:d; c.onclick=()=>openInspector(d); depEl.appendChild(c); });
-  } else depSec.classList.add("hidden");
-  // result
-  const resSec = $("#insp-result-section");
-  if (t.result){ resSec.classList.remove("hidden"); $("#insp-result").textContent = t.result; }
-  else resSec.classList.add("hidden");
-  // review controls only for submitted
-  $("#insp-review").classList.toggle("hidden", t.state!=="submitted");
-  $("#insp-note").value = "";
-  $("#inspector").classList.remove("hidden");
-}
-function refreshInspectorIf(id){ if(inspId===id && !$("#inspector").classList.contains("hidden")) openInspector(id); }
-$("#insp-close").onclick = () => $("#inspector").classList.add("hidden");
-$("#insp-accept").onclick = async () => {
-  if(!inspId) return; const note=$("#insp-note").value.trim();
-  try{ await api("POST",`/api/tasks/${inspId}/review`,{decision:"accepted",note}); $("#inspector").classList.add("hidden"); }catch(e){ alert(e.message); }
-};
-$("#insp-reject").onclick = async () => {
-  if(!inspId) return; const note=$("#insp-note").value.trim();
-  const followup = prompt("Follow-up instruction for the redo (blank = just reject):","");
-  try{ await api("POST",`/api/tasks/${inspId}/review`,{decision:"rejected",note,followup_instruction:followup||undefined}); $("#inspector").classList.add("hidden"); }catch(e){ alert(e.message); }
-};
-document.addEventListener("keydown",(e)=>{ if(e.key==="Escape") $("#inspector").classList.add("hidden"); });
-
-// deck collapse
-document.querySelectorAll(".deck-toggle").forEach(b=>{
-  b.onclick = () => { const deck = b.closest(".deck"); deck.classList.toggle("collapsed");
-    b.textContent = deck.classList.contains("collapsed") ? (b.dataset.side==="left"?"›":"‹") : (b.dataset.side==="left"?"‹":"›"); };
+$('goal').addEventListener('input', renderControls);
+$('create').addEventListener('click', async () => { try { await mutate('/api/project', { goal: $('goal').value.trim() }, 'Project created.'); } catch {} });
+$('plan').addEventListener('click', async () => { try { const data = await mutate('/api/project/plan', {}, 'Lead AI planned the work.'); if (data?.note) log(data.note); } catch {} });
+$('pause').addEventListener('click', async () => { const next = state.project?.state === 'paused' ? 'active' : 'paused'; try { await mutate('/api/project/state', { state: next }, `Project ${next === 'active' ? 'resumed' : 'paused'}.`); } catch {} });
+$('done').addEventListener('click', async () => { if (!confirm('Mark this project done? Workers will stop claiming tasks. This cannot be resumed.')) return; try { await mutate('/api/project/state', { state: 'done' }, 'Project marked done.'); } catch {} });
+$('new-project').addEventListener('click', () => { if (!confirm('Start a new project? Creating it will replace the current project and clear its tasks.')) return; $('goal-section').hidden = false; $('goal').value = ''; $('goal').focus(); $('goal-help').textContent = 'Creating this project will clear the previous task list.'; renderControls(); });
+document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b === button))); renderTasks(); }));
+document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => $(b.dataset.close).close()));
+$('join').addEventListener('click', () => { $('join-error').textContent = ''; $('join-dialog').showModal(); $('owner').focus(); });
+$('provider').addEventListener('change', () => { $('credentials').hidden = demo || $('provider').value === 'mock'; $('key').value = ''; });
+$('join-dialog').addEventListener('close', () => { $('key').value = ''; });
+$('join-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (!$('owner').value.trim()) return;
+  $('join-error').textContent = '';
+  try { const data = await mutate('/api/worker/register', { owner: $('owner').value.trim(), provider: demo ? 'mock' : $('provider').value, api_key: demo ? '' : $('key').value.trim(), model: demo ? '' : $('model').value.trim(), room_code: $('room-code').value.trim() }); if (!data) return; setWorker(data.worker.id); $('join-dialog').close(); $('key').value = ''; render(); log(`${data.worker.display} joined.`); }
+  catch (error) { $('join-error').textContent = error.message; }
 });
-
-// ───────────────────────── ticker ─────────────────────────
-function tick(html, kind){
-  const t = $("#ticker"); const line = document.createElement("div");
-  line.className = "line" + (kind?` ev-${kind}`:"");
-  line.innerHTML = html; t.innerHTML=""; t.appendChild(line);
+$('leave').addEventListener('click', async () => { try { await mutate(`/api/worker/${encodeURIComponent(workerId)}/unregister`, {}, 'You left the worker team.'); setWorker(null); render(); } catch {} });
+$('claim').addEventListener('click', async () => { try { const data = await mutate(`/api/worker/${encodeURIComponent(workerId)}/next`, {}); if (data?.task) { state.selected = data.task.id; $('worker-output').value = ''; render(); log(`Claimed: ${data.task.title}`); } else toast(data?.stop ? 'The project is paused or done.' : 'No eligible tasks yet. Waiting for reviews or new tasks.'); } catch {} });
+$('submit-form').addEventListener('submit', async event => { event.preventDefault(); const task = selectedTask(); if (!task || !$('worker-output').value.trim()) return; try { await mutate(`/api/worker/${encodeURIComponent(workerId)}/submit`, { task_id: task.id, output: $('worker-output').value, ok: true, error: '', elapsed: 0 }, `Submitted: ${task.title}`); $('worker-output').value = ''; } catch {} });
+$('review-form').addEventListener('submit', async event => { event.preventDefault(); const task = selectedTask(), decision = event.submitter?.value; if (!task || !['accepted', 'rejected'].includes(decision)) return; try { await mutate(`/api/tasks/${encodeURIComponent(task.id)}/review`, { decision, note: $('review-note').value.trim(), ...(decision === 'rejected' && $('followup').value.trim() ? { followup_instruction: $('followup').value.trim() } : {}) }, `${task.title}: ${decision}.`); $('review-note').value = ''; $('followup').value = ''; } catch {} });
+$('add-task').addEventListener('click', () => { $('dependencies').replaceChildren(); state.tasks.forEach(t => { const opt = element('option', t.title); opt.value = t.id; $('dependencies').append(opt); }); $('task-error').textContent = ''; $('task-dialog').showModal(); });
+$('task-form').addEventListener('submit', async event => { event.preventDefault(); const title = $('task-title').value.trim(), instruction = $('task-instruction').value.trim(); if (!title || !instruction) return; try { const data = await mutate('/api/tasks', { title, instruction, depends_on: [...$('dependencies').selectedOptions].map(o => o.value) }, `Task added: ${title}`); if (data) { $('task-dialog').close(); $('task-form').reset(); state.selected = data.task.id; render(); } } catch (error) { $('task-error').textContent = error.message; } });
+async function copy(text) { try { await navigator.clipboard.writeText(text); toast('Copied.'); } catch { toast('Clipboard unavailable. Select the text and copy it manually.'); } }
+$('copy-instruction').addEventListener('click', () => copy(selectedTask()?.instruction || ''));
+$('preview-output').addEventListener('click', () => { const frame = $('output-frame'); frame.hidden = !frame.hidden; if (!frame.hidden) frame.srcdoc = selectedTask()?.result || ''; });
+$('invite').addEventListener('click', () => { $('invite-address').value = location.origin + location.pathname; $('invite-help').textContent = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) ? 'For another laptop, replace localhost with the host’s LAN IP, keeping the port. Both devices must be on the same network. Use the backend server address, not the standalone demo.' : 'Share this address with teammates on the host’s network. The prototype uses a shared room without sign-in.'; $('invite-dialog').showModal(); });
+$('copy-address').addEventListener('click', () => copy($('invite-address').value));
+function connectStream() {
+  stream = new EventSource('/api/events');
+  stream.addEventListener('snapshot', event => { try { const data = JSON.parse(event.data); state.project = data.project; state.tasks = data.tasks || []; state.workers = data.workers || []; connection(true); render(); } catch { connection(false); } });
+  const descriptions = { project_state: 'Project state changed.', tasks_planned: 'Lead AI planned tasks.', task_created: 'New task added.', task_claimed: 'A worker claimed a task.', task_submitted: 'A result is ready for review.', task_reviewed: 'Task review updated.', worker_joined: 'A worker joined.', worker_left: 'A worker left.', done: 'Project complete.' };
+  for (const [name, description] of Object.entries(descriptions)) stream.addEventListener(name, () => { log(description); sync(); });
+  stream.onerror = () => { connection(false); renderControls(); }; // EventSource reconnects and replays a fresh snapshot.
 }
-
-// ───────────────────────── helpers ─────────────────────────
-const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
-const esc = (s)=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const slug = (s)=>String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"section";
-function note(sel,msg){ $(sel).textContent = msg; }
-function providerColor(p){ return {anthropic:"#d97757",openai:"#3ecf8e",kimi:"#c084fc",mock:"#8793a9"}[p]||"#5b9dff"; }
-
-// ═════════════════════════ CONSTELLATION (canvas physics) ═════════════════════════
-const sim = (() => {
-  const cv = $("#constellation"), ctx = cv.getContext("2d");
-  let W=0,H=0,DPR=Math.min(2,window.devicePixelRatio||1);
-  const nodes = new Map();   // id -> {id,type,x,y,vx,vy,r,label,color}
-  const pulses = [];         // {fromId,toId,t,speed,color}
-  const bursts = [];         // {x,y,t,color}
-  let confetti = [];
-  let core = { x:0, y:0 };
-
-  function resize(){ W=cv.clientWidth=innerWidth; H=cv.clientHeight=innerHeight;
-    cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); core={x:W/2,y:H/2}; }
-  addEventListener("resize", resize); resize();
-
-  function ensure(id, type, label, color){
-    let n = nodes.get(id);
-    if(!n){ const a=Math.random()*Math.PI*2, d=type==="worker"?210:330;
-      n = { id,type,label,color, x:core.x+Math.cos(a)*d, y:core.y+Math.sin(a)*d, vx:0, vy:0,
-            r: type==="worker"?15:9 };
-      nodes.set(id,n);
-    } else { n.label=label; n.color=color; }
-    return n;
-  }
-  // Rebuild node set from STATE (adds new, removes gone).
-  function sync(){
-    const live = new Set();
-    STATE.workers.forEach(w=>{ live.add("w:"+w.id); ensure("w:"+w.id,"worker",w.display,providerColor(w.provider)); });
-    STATE.tasks.forEach(t=>{ live.add("t:"+t.id); const n=ensure("t:"+t.id,"task",t.title,STATE_COLORS[t.state]||"#8793a9"); n.taskState=t.state; });
-    [...nodes.keys()].forEach(k=>{ if(k!=="core" && !live.has(k)) nodes.delete(k); });
-  }
-  function nodeFor(idLabel){ // accept raw worker/task ids from events
-    return nodes.get("w:"+idLabel) || nodes.get("t:"+idLabel);
-  }
-  function pulse(fromRaw, toRaw, color){
-    const a=nodeFor(fromRaw), b=nodeFor(toRaw); if(!a||!b) return;
-    pulses.push({a,b,t:0,speed:.028,color});
-  }
-  function burst(taskRaw, color){ const n=nodeFor(taskRaw); if(n) bursts.push({x:n.x,y:n.y,t:0,color}); }
-  function celebrate(){ for(let i=0;i<120;i++) confetti.push({x:core.x,y:core.y,
-    vx:(Math.random()-.5)*7, vy:(Math.random()-.5)*7-1, t:0, c:["#5b9dff","#3ecf8e","#ffb454","#c084fc"][i%4]}); }
-
-  // physics: workers orbit core; tasks settle on outer ring near their worker/deps.
-  function step(){
-    const K_CENTER=0.0016, REPEL=1400, DAMP=0.86;
-    const arr=[...nodes.values()];
-    for(const n of arr){
-      // pull toward core at a type-based radius
-      const tr = n.type==="worker"?200:320;
-      const dx=n.x-core.x, dy=n.y-core.y, dist=Math.hypot(dx,dy)||1;
-      const diff=(dist-tr);
-      n.vx -= (dx/dist)*diff*K_CENTER; n.vy -= (dy/dist)*diff*K_CENTER;
-      // gentle tangential drift so it feels alive
-      n.vx += (-dy/dist)*0.015*(n.type==="worker"?1:0.4);
-      n.vy += ( dx/dist)*0.015*(n.type==="worker"?1:0.4);
-    }
-    // mutual repulsion
-    for(let i=0;i<arr.length;i++) for(let j=i+1;j<arr.length;j++){
-      const a=arr[i],b=arr[j], dx=a.x-b.x, dy=a.y-b.y; let d2=dx*dx+dy*dy; if(d2<1)d2=1;
-      const f=REPEL/d2, d=Math.sqrt(d2), fx=(dx/d)*f, fy=(dy/d)*f;
-      a.vx+=fx; a.vy+=fy; b.vx-=fx; b.vy-=fy;
-    }
-    for(const n of arr){ n.vx*=DAMP; n.vy*=DAMP; n.x+=n.vx; n.y+=n.vy; }
-  }
-
-  function draw(){
-    step();
-    ctx.clearRect(0,0,W,H);
-
-    // dependency edges (task -> task)
-    ctx.lineWidth=1;
-    STATE.tasks.forEach(t=>{
-      const to=nodes.get("t:"+t.id); if(!to||!t.depends_on) return;
-      t.depends_on.forEach(d=>{ const from=nodes.get("t:"+d); if(!from) return;
-        ctx.strokeStyle="rgba(120,150,220,.14)"; ctx.beginPath(); ctx.moveTo(from.x,from.y); ctx.lineTo(to.x,to.y); ctx.stroke(); });
-    });
-    // worker -> core tethers + task-of-worker link
-    nodes.forEach(n=>{ if(n.type==="worker"){
-      ctx.strokeStyle="rgba(91,157,255,.10)"; ctx.beginPath(); ctx.moveTo(core.x,core.y); ctx.lineTo(n.x,n.y); ctx.stroke();
-    }});
-
-    // the LEAD core
-    const t=performance.now()/1000;
-    const cr=26+Math.sin(t*2)*3;
-    const g=ctx.createRadialGradient(core.x,core.y,2,core.x,core.y,cr*2.4);
-    g.addColorStop(0,"rgba(91,157,255,.9)"); g.addColorStop(.4,"rgba(91,157,255,.35)"); g.addColorStop(1,"rgba(91,157,255,0)");
-    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(core.x,core.y,cr*2.4,0,7); ctx.fill();
-    ctx.fillStyle="#cfe0ff"; ctx.beginPath(); ctx.arc(core.x,core.y,cr*.55,0,7); ctx.fill();
-    ctx.fillStyle="rgba(230,240,255,.9)"; ctx.font="700 11px Segoe UI,sans-serif"; ctx.textAlign="center";
-    ctx.fillText("LEAD AI", core.x, core.y+cr*2.4+14);
-
-    // nodes
-    nodes.forEach(n=>{
-      ctx.save();
-      if(n.type==="worker"){
-        ctx.shadowColor=n.color; ctx.shadowBlur=14;
-        ctx.fillStyle=n.color; ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,7); ctx.fill();
-        ctx.shadowBlur=0; ctx.fillStyle="#06101f"; ctx.font="800 11px Segoe UI"; ctx.textAlign="center"; ctx.textBaseline="middle";
-        ctx.fillText((n.label||"?")[0].toUpperCase(), n.x, n.y);
-        ctx.fillStyle="rgba(230,240,255,.72)"; ctx.font="600 10px Segoe UI"; ctx.textBaseline="top";
-        ctx.fillText(trim(n.label,14), n.x, n.y+n.r+4);
-      } else {
-        const pulse = n.taskState==="assigned";
-        const r = n.r + (pulse?Math.sin(t*5)*1.6:0);
-        ctx.shadowColor=n.color; ctx.shadowBlur = n.taskState==="accepted"?16:9;
-        ctx.fillStyle=n.color; ctx.globalAlpha = n.taskState==="queued"?.6:1;
-        ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7); ctx.fill(); ctx.globalAlpha=1;
-        if(n.taskState==="accepted"){ ctx.strokeStyle="#06160f"; ctx.lineWidth=2; ctx.beginPath();
-          ctx.moveTo(n.x-3,n.y); ctx.lineTo(n.x-1,n.y+2.5); ctx.lineTo(n.x+3.5,n.y-3); ctx.stroke(); }
-      }
-      ctx.restore();
-    });
-
-    // pulses travelling along edges
-    for(let i=pulses.length-1;i>=0;i--){ const p=pulses[i]; p.t+=p.speed;
-      const x=p.a.x+(p.b.x-p.a.x)*p.t, y=p.a.y+(p.b.y-p.a.y)*p.t;
-      ctx.fillStyle=p.color; ctx.shadowColor=p.color; ctx.shadowBlur=12;
-      ctx.beginPath(); ctx.arc(x,y,3.2,0,7); ctx.fill(); ctx.shadowBlur=0;
-      if(p.t>=1) pulses.splice(i,1);
-    }
-    // bursts on review
-    for(let i=bursts.length-1;i>=0;i--){ const b=bursts[i]; b.t+=0.05;
-      ctx.strokeStyle=b.color; ctx.globalAlpha=1-b.t; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.arc(b.x,b.y,8+b.t*40,0,7); ctx.stroke(); ctx.globalAlpha=1;
-      if(b.t>=1) bursts.splice(i,1);
-    }
-    // confetti on done
-    if(confetti.length){ for(let i=confetti.length-1;i>=0;i--){ const c=confetti[i]; c.t+=0.016; c.vy+=0.12; c.x+=c.vx; c.y+=c.vy;
-      ctx.fillStyle=c.c; ctx.globalAlpha=Math.max(0,1-c.t/2.2); ctx.fillRect(c.x,c.y,4,4); ctx.globalAlpha=1;
-      if(c.t>2.2) confetti.splice(i,1); } }
-
-    requestAnimationFrame(draw);
-  }
-  const trim=(s,n)=>{ s=String(s||""); return s.length>n?s.slice(0,n-1)+"…":s; };
-  requestAnimationFrame(draw);
-  // hitTest returns the raw task id under (x,y), or null.
-  function hitTest(x,y){
-    let best=null, bd=1e9;
-    nodes.forEach(n=>{ if(n.type!=="task") return; const d=Math.hypot(n.x-x,n.y-y);
-      if(d<Math.max(14,n.r+6) && d<bd){ bd=d; best=n.id.slice(2); } });
-    return best;
-  }
-  return { sync, pulse, burst, celebrate, hitTest };
-})();
-
-// click a task node in the constellation to inspect it
-$("#constellation").addEventListener("click",(e)=>{
-  const id = sim.hitTest(e.clientX, e.clientY);
-  if (id) openInspector(id);
+async function heartbeat() { if (!workerId || demo) return; try { await request(`/api/worker/${encodeURIComponent(workerId)}/heartbeat`, {}); } catch {} }
+function newTask(title, instruction, depends_on = []) { return { id: `t_${crypto.randomUUID()}`, seq: state.tasks.length + 1, project_id: state.project.id, title, instruction, state: 'queued', assigned_to: null, depends_on, result: '', review_note: '' }; }
+function sampleWorker(owner) { return { id: `w_${crypto.randomUUID()}`, owner, provider: 'mock', display: `${owner}'s Mock`, status: 'idle', last_seen: Date.now() / 1000 }; }
+async function demoRequest(path, body) {
+  if (path === '/api/project' && body) { clearTimeout(sampleTimer); state.project = { id: 'sample-project', goal: body.goal, state: 'planning', summary: '' }; state.tasks = []; state.selected = null; state.workers.forEach(w => w.status = 'idle'); return { project: state.project }; }
+  if (path === '/api/project/plan') { state.tasks = []; for (const [title, instruction] of [['Define the page structure', 'Create semantic HTML for a team-matching page with a hero, a team list, and a join form. Use #hero, #teams, and #join.'], ['Design the visual system', 'Provide CSS for #hero, #teams, and #join. Use a blue and white palette, readable typography, and a responsive layout.'], ['Check the complete experience', 'Check keyboard navigation, form labels, mobile layout, and readable contrast. Report any missing requirements.']]) state.tasks.push(newTask(title, instruction)); state.project.state = 'active'; return { project: state.project, tasks: state.tasks, used_llm: false, note: 'Sample tasks only. No model was called.' }; }
+  if (path === '/api/project/state') { state.project.state = body.state; return { project: state.project }; }
+  if (path === '/api/tasks') { const task = newTask(body.title, body.instruction, body.depends_on); state.tasks.push(task); return { task }; }
+  if (path.endsWith('/review')) { const task = state.tasks.find(t => path.includes(t.id)); task.state = body.decision; task.review_note = body.note; let followup = null; if (body.decision === 'rejected' && body.followup_instruction) { followup = newTask(`Revise: ${task.title}`, body.followup_instruction); state.tasks.push(followup); } return { task, followup }; }
+  if (path === '/api/worker/register') { const worker = sampleWorker(body.owner); state.workers.push(worker); return { worker }; }
+  const worker = state.workers.find(w => path.includes(w.id));
+  if (path.endsWith('/unregister')) { state.workers = state.workers.filter(w => w !== worker); state.tasks.filter(t => t.assigned_to === worker?.id && t.state === 'assigned').forEach(t => { t.state = 'queued'; t.assigned_to = null; }); return { ok: true }; }
+  if (path.endsWith('/next')) { if (state.project?.state !== 'active') return { task: null, stop: true }; const task = state.tasks.find(t => t.state === 'queued' && t.depends_on.every(id => state.tasks.find(d => d.id === id)?.state === 'accepted')); if (task) { task.state = 'assigned'; task.assigned_to = worker.id; worker.status = 'working'; } return { task: task || null }; }
+  if (path.endsWith('/submit')) { const task = state.tasks.find(t => t.id === body.task_id); task.result = body.output; task.state = 'submitted'; worker.status = 'idle'; return { ok: true }; }
+  throw new Error('Unsupported sample action.');
+}
+$('sample-run').addEventListener('click', () => {
+  if (state.project?.state !== 'active') return;
+  if (!state.workers.some(w => w.id !== workerId)) state.workers.push(sampleWorker('Sample worker'));
+  const w = state.workers.find(w => w.id !== workerId);
+  const tasks = state.tasks.filter(t => t.state === 'queued' && t.depends_on.every(id => state.tasks.find(d => d.id === id)?.state === 'accepted'));
+  if (!tasks.length) return toast('These tasks are waiting for their dependencies to be accepted.');
+  tasks.forEach(t => { t.state = 'assigned'; t.assigned_to = w.id; }); w.status = 'working'; render(); log('Sample worker claimed the eligible tasks.');
+  sampleTimer = setTimeout(() => { if (state.project?.state === 'done') return; tasks.filter(t => state.tasks.includes(t) && t.state === 'assigned').forEach(t => { t.state = 'submitted'; t.result = `Sample result for: ${t.title}\n\nThis is illustrative output for trying the review workflow. Connect the backend and a worker client to produce real work.`; }); w.status = 'idle'; render(); log('Sample results are ready for your review.'); }, 1200);
 });
-
-connect();
-})();
+$('demo-banner').hidden = !demo;
+if (demo) { $('provider').value = 'mock'; $('provider').disabled = true; $('goal').value = 'Build a team-matching page for our hackathon.'; connection(true); log('Sample workspace ready. Create a project to begin.'); render(); }
+else { render(); sync(); connectStream(); setInterval(heartbeat, 5000); }
+window.addEventListener('pagehide', () => stream?.close());
