@@ -1,144 +1,21 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Consortium · Mission Control</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%235b9dff'/%3E%3Ccircle cx='6' cy='8' r='2.5' fill='%233ecf8e'/%3E%3Ccircle cx='26' cy='10' r='2.5' fill='%23ffb454'/%3E%3Ccircle cx='24' cy='24' r='2.5' fill='%23c084fc'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="/app.css" />
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Consortium connects a lead AI and a team of workers in one shared project."><title>Consortium / Workspace</title><link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head>
 <body>
-<!-- Live physics constellation renders here, behind the UI -->
-<canvas id="constellation"></canvas>
-
-<!-- Top bar -->
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-mark"></span>
-    <span class="brand-name">CONSORTIUM</span>
-    <span class="brand-sub">mission control</span>
-  </div>
-  <div class="link-state">
-    <span id="conn-dot" class="conn-dot"></span>
-    <span id="conn-text">connecting…</span>
-  </div>
-  <div class="phase" id="phase-pill" data-state="none">
-    <span id="phase-label">no project</span>
-  </div>
-</header>
-
-<!-- Left deck: leader controls -->
-<aside class="deck deck-left" id="deck-left">
-  <button class="deck-toggle" data-side="left" title="collapse">‹</button>
-
-  <section class="panel">
-    <h2>Leader console</h2>
-    <label class="field">
-      <span>Mission goal</span>
-      <textarea id="goal" rows="3" placeholder="e.g. Build a landing page for a hackathon team-matching app with a hero and a signup form"></textarea>
-    </label>
-    <div class="btn-row">
-      <button id="btn-create" class="btn btn-ghost">Set goal</button>
-      <button id="btn-plan" class="btn btn-primary">Plan &amp; launch ▸</button>
-    </div>
-    <p id="plan-note" class="note"></p>
-    <div class="btn-row phase-controls">
-      <button id="btn-pause" class="btn btn-ghost" disabled>Pause</button>
-      <button id="btn-resume" class="btn btn-ghost" disabled>Resume</button>
-      <button id="btn-done" class="btn btn-danger" disabled>Mark done</button>
-    </div>
-  </section>
-
-  <section class="panel">
-    <h2>Add a task</h2>
-    <label class="field"><span>Title</span>
-      <input id="t-title" placeholder="Footer section" /></label>
-    <label class="field"><span>Instruction</span>
-      <textarea id="t-instruction" rows="2" placeholder="Build a footer with #footer containing…"></textarea></label>
-    <button id="btn-addtask" class="btn btn-ghost full">+ Enqueue task</button>
-  </section>
-
-  <section class="panel counters" id="counters">
-    <div class="counter" data-k="queued"><b id="c-queued">0</b><span>queued</span></div>
-    <div class="counter" data-k="assigned"><b id="c-assigned">0</b><span>working</span></div>
-    <div class="counter" data-k="submitted"><b id="c-submitted">0</b><span>review</span></div>
-    <div class="counter" data-k="accepted"><b id="c-accepted">0</b><span>done</span></div>
-    <div class="counter" data-k="rejected"><b id="c-rejected">0</b><span>redo</span></div>
-  </section>
-</aside>
-
-<!-- Right deck: join + roster + review -->
-<aside class="deck deck-right" id="deck-right">
-  <button class="deck-toggle" data-side="right" title="collapse">›</button>
-
-  <section class="panel">
-    <h2>Bring your AI</h2>
-    <label class="field"><span>Your name</span>
-      <input id="w-owner" placeholder="Alice" /></label>
-    <label class="field"><span>Provider</span>
-      <select id="w-provider">
-        <option value="anthropic">Claude · Anthropic</option>
-        <option value="openai">Codex · OpenAI</option>
-        <option value="kimi">Kimi · open model</option>
-        <option value="custom">Custom · any OpenAI-compatible</option>
-        <option value="mock" selected>Mock · no key</option>
-      </select></label>
-    <label class="field" id="w-custom-url-field" style="display:none"><span>Base URL <em>(custom)</em></span>
-      <input id="w-base-url" placeholder="https://openrouter.ai/api/v1" /></label>
-    <label class="field" id="w-model-field" style="display:none"><span>Model</span>
-      <input id="w-model" placeholder="e.g. meta-llama/llama-3.1-8b-instruct" /></label>
-    <label class="field"><span>API key <em>(optional)</em></span>
-      <input id="w-key" type="password" placeholder="stays between you and the host" /></label>
-    <button id="btn-join" class="btn btn-primary full">Join the mesh ✦</button>
-    <p id="join-note" class="note"></p>
-  </section>
-
-  <section class="panel">
-    <h2>The minds <span id="roster-count" class="chip">0</span></h2>
-    <div id="roster" class="roster"></div>
-  </section>
-
-  <section class="panel">
-    <h2>Awaiting review <span id="review-count" class="chip chip-amber">0</span></h2>
-    <div id="review-queue" class="review-queue"></div>
-  </section>
-</aside>
-
-<!-- Bottom center: live event ticker -->
-<footer class="ticker-wrap">
-  <div class="ticker-label">live feed</div>
-  <div id="ticker" class="ticker"></div>
-</footer>
-
-<!-- Task inspector (click a task node) -->
-<div id="inspector" class="inspector hidden">
-  <button id="insp-close" class="insp-close">✕</button>
-  <div class="insp-head">
-    <span id="insp-seq" class="insp-seq"></span>
-    <h3 id="insp-title"></h3>
-    <span id="insp-state" class="state-chip"></span>
-  </div>
-  <div class="insp-section">
-    <h4>Instruction</h4>
-    <pre id="insp-instruction"></pre>
-  </div>
-  <div class="insp-section" id="insp-deps-section">
-    <h4>Depends on</h4>
-    <div id="insp-deps" class="dep-chips"></div>
-  </div>
-  <div class="insp-section" id="insp-result-section">
-    <h4>Result</h4>
-    <pre id="insp-result"></pre>
-  </div>
-  <div class="insp-review" id="insp-review">
-    <input id="insp-note" placeholder="review note (optional)" />
-    <div class="btn-row">
-      <button id="insp-accept" class="btn btn-ok full">Accept ✓</button>
-      <button id="insp-reject" class="btn btn-danger full">Reject ↺</button>
-    </div>
-  </div>
-</div>
-
-<script src="/app.js"></script>
-</body>
-</html>
+<header class="masthead"><a href="./" class="brand" aria-label="Consortium home"><svg viewBox="0 0 30 30" aria-hidden="true"><path d="M5 7h13v13H5zM12 14h13v13H12z"/></svg>CONSORTIUM</a><span class="workspace-name">Team workspace</span><span id="connection" class="connection">Connecting</span><button id="invite" class="quiet">Invite teammate</button></header>
+<div id="demo-banner" class="demo-banner" hidden><strong>Sample workspace</strong><span>Local demo. No API calls or real agents.</span><button id="sample-run">Run sample workers</button><a href="./">Connect to backend</a></div>
+<div class="layout">
+<aside class="sidebar"><nav aria-label="Workspace"><a href="#workspace" class="selected">Project</a><a href="#team">Team <span id="worker-count">0</span></a><a href="#activity">Activity</a></nav><section class="team" id="team"><div class="section-heading"><h2>People & agents</h2><button id="join" class="small-button">Join team</button></div><div class="lead-row"><span class="avatar lead-avatar">L</span><div><strong>Lead AI</strong><small>Plans and reviews</small></div><span class="lead-marker">Lead</span></div><div id="workers"></div><p id="worker-empty" class="muted">No workers yet. Join the team to take a task.</p></section><div class="worker-console" id="worker-console" hidden><div class="section-heading"><h2>Your worker</h2><button class="quiet" id="leave">Leave</button></div><p id="my-worker"></p><button class="button secondary" id="claim">Claim next task</button><p class="help" id="worker-help">Use your AI to complete the instruction, then submit the result.</p></div><div class="sidebar-note"><span class="network-mark" aria-hidden="true">◌</span><p>One lead.<br>A team of independent minds.</p><small>Shared room on the host’s network.</small></div></aside>
+<main id="workspace"><div class="project-heading"><div><span class="project-state" id="project-state">No project</span><h1 id="project-title">Give the team a direction.</h1><p id="project-summary">Set a goal. Your lead AI will break it into work the team can share.</p></div><div class="flow-shape" aria-hidden="true"><svg viewBox="0 0 240 240" focusable="false"><defs><path id="hero-route-a" pathLength="100" d="M120 34C174 34 212 72 212 120C212 168 174 206 120 206C66 206 28 168 28 120C28 72 66 34 120 34Z"/><path id="hero-route-b" pathLength="100" d="M120 22C156 22 181 66 181 120C181 174 156 218 120 218C84 218 59 174 59 120C59 66 84 22 120 22Z"/><path id="hero-route-c" pathLength="100" d="M120 42C184 42 211 80 201 127C191 174 157 205 108 199C59 193 29 157 37 110C45 63 72 42 120 42Z"/></defs><g class="orbit-shell shell-a"><use class="orbit-line" href="#hero-route-a"/><use class="orbit-glint" href="#hero-route-a"/><circle class="orbit-particle" r="2.8"><animateMotion dur="18s" begin="-7s" repeatCount="indefinite"><mpath href="#hero-route-a"/></animateMotion></circle></g><g class="orbit-shell shell-b"><use class="orbit-line" href="#hero-route-b"/><use class="orbit-glint" href="#hero-route-b"/><circle class="orbit-particle muted-particle" r="2.2"><animateMotion dur="24s" begin="-13s" repeatCount="indefinite"><mpath href="#hero-route-b"/></animateMotion></circle></g><g class="orbit-shell shell-c"><use class="orbit-line" href="#hero-route-c"/><use class="orbit-glint" href="#hero-route-c"/><circle class="orbit-particle" r="2.4"><animateMotion dur="31s" begin="-21s" repeatCount="indefinite"><mpath href="#hero-route-c"/></animateMotion></circle></g><g class="flow-kernel"><circle class="kernel-halo" cx="120" cy="120" r="24"/><path d="M102 121C105 101 130 94 143 109C156 124 142 145 121 143C101 141 92 125 102 109"/><circle class="kernel-node" cx="102" cy="121" r="2"/><circle class="kernel-node" cx="143" cy="109" r="2"/><circle class="kernel-node" cx="121" cy="143" r="2"/><circle class="kernel-heart" cx="120" cy="120" r="3.5"/></g></svg></div><div class="project-actions"><button id="pause" class="button secondary" hidden>Pause</button><button id="done" class="button secondary" hidden>Mark done</button></div></div>
+<section id="goal-section" class="goal-section"><label for="goal">Project goal</label><textarea id="goal" rows="3" placeholder="What should the team build? Include the audience, features, and what a finished result looks like." maxlength="20000"></textarea><div class="goal-bottom"><span id="goal-help">Start with an outcome, not a task list.</span><button id="create" class="button primary">Create project</button></div></section>
+<div class="plan-bar" id="plan-bar" hidden><div><strong>The goal is set.</strong><p>Let the lead AI turn it into an initial task list.</p></div><button id="plan" class="button primary">Plan tasks</button></div>
+<div class="progress-section"><div class="progress-label"><span>Team progress</span><span id="progress-text">No tasks yet</span></div><div class="progress-track"><span id="progress-fill"></span></div></div>
+<div class="work-area"><section class="queue"><div class="section-heading queue-title"><h2>Work queue <span id="task-count">0</span></h2><button id="add-task" class="quiet" disabled>＋ Add task</button></div><div class="filters" role="group" aria-label="Filter tasks"><button data-filter="all" aria-pressed="true">All tasks</button><button data-filter="assigned" aria-pressed="false">In progress</button><button data-filter="submitted" aria-pressed="false">Needs review <span id="review-count">0</span></button><button data-filter="accepted" aria-pressed="false">Accepted</button></div><div id="task-list" class="task-list"></div><div class="queue-empty" id="queue-empty"><svg class="queue-flow" viewBox="0 0 220 112" aria-hidden="true"><defs><path id="queue-route" pathLength="100" d="M22 57C52 15 88 94 117 51C145 10 169 85 199 42"/></defs><path class="queue-baseline" d="M20 91H200"/><use class="queue-route" href="#queue-route"/><g class="queue-stations"><circle cx="22" cy="57" r="5"/><circle cx="117" cy="51" r="5"/><circle cx="199" cy="42" r="5"/></g><g class="queue-packet"><circle r="3"><animateMotion dur="14s" repeatCount="indefinite"><mpath href="#queue-route"/></animateMotion></circle><circle r="2"><animateMotion dur="14s" begin="-7s" repeatCount="indefinite"><mpath href="#queue-route"/></animateMotion></circle></g></svg><h3>The work starts with a plan.</h3><p>Create a project, then ask the lead AI to plan the tasks.</p></div></section>
+<aside class="inspector" id="inspector" aria-label="Task details"><div id="detail-empty"><svg class="inspector-flow" viewBox="0 0 220 190" aria-hidden="true"><defs><path id="detail-route-a" pathLength="100" d="M24 104L61 44L117 27L187 62L198 127L142 165L73 156Z"/><path id="detail-route-b" pathLength="100" d="M61 44L98 88L142 165M24 104L98 88L187 62M73 156L98 88L198 127"/></defs><g class="inspector-links"><use href="#detail-route-a"/><use href="#detail-route-b"/></g><g class="inspector-cells"><circle cx="24" cy="104" r="3"/><circle cx="61" cy="44" r="4"/><circle cx="117" cy="27" r="3"/><circle cx="187" cy="62" r="4"/><circle cx="198" cy="127" r="3"/><circle cx="142" cy="165" r="4"/><circle cx="73" cy="156" r="3"/><circle cx="98" cy="88" r="5"/></g><g class="inspector-packets"><circle r="2.7"><animateMotion dur="18s" repeatCount="indefinite"><mpath href="#detail-route-a"/></animateMotion></circle><circle r="2"><animateMotion dur="18s" begin="-9s" repeatCount="indefinite"><mpath href="#detail-route-a"/></animateMotion></circle><circle r="2.4"><animateMotion dur="24s" repeatCount="indefinite"><mpath href="#detail-route-b"/></animateMotion></circle></g></svg><h2>A closer look</h2><p>Select a task to see its instruction, worker output, and review.</p></div><div id="task-detail" hidden><div class="detail-top"><span id="detail-state" class="state-chip"></span><span id="detail-seq"></span></div><h2 id="detail-title"></h2><p id="detail-worker" class="detail-worker"></p><h3>Instruction</h3><p id="detail-instruction" class="instruction"></p><p id="detail-deps" class="help"></p><div id="output-section" hidden><div class="section-heading"><h3>Worker output</h3><button id="preview-output" class="quiet">Preview HTML</button></div><pre id="detail-output"></pre><iframe id="output-frame" sandbox="allow-scripts" title="Worker HTML output preview" hidden></iframe></div><div id="review-note-section" hidden><h3>Review note</h3><p id="detail-review"></p></div><form id="review-form" hidden><label for="review-note">Review note</label><textarea id="review-note" rows="2" placeholder="What works, or what needs to change?"></textarea><label for="followup">Follow-up instruction <span>optional on rejection</span></label><textarea id="followup" rows="2" placeholder="Describe a correction for a new task"></textarea><div class="review-actions"><button class="button secondary" type="submit" value="rejected">Request changes</button><button class="button primary" type="submit" value="accepted">Accept</button></div></form><form id="submit-form" hidden><label for="worker-output">Your result</label><textarea id="worker-output" rows="7" required placeholder="Paste the result produced by your AI."></textarea><button class="button primary" type="submit">Submit for review</button></form><button id="copy-instruction" class="quiet copy-instruction">Copy instruction</button></div></aside></div>
+<section id="activity" class="activity"><div class="section-heading"><h2>Session activity</h2><span id="event-status" class="help">Waiting for the host</span></div><ol id="events"><li>Workspace opened. Waiting for project state.</li></ol></section><footer><span>Consortium</span><button id="new-project" class="quiet" hidden>Start a new project</button></footer>
+</main></div>
+<div id="toast" role="status" hidden></div>
+<dialog id="join-dialog"><form id="join-form"><div class="dialog-top"><h2>Join the team</h2><button type="button" class="close" data-close="join-dialog" aria-label="Close join dialog">×</button></div><p>Register the AI you’re working with. You can claim tasks here or run the worker client.</p><label for="owner">Your name</label><input id="owner" required maxlength="60" autocomplete="given-name" placeholder="Derek"><label for="provider">Provider</label><select id="provider"><option value="mock">Mock (demo)</option><option value="anthropic">Claude / Anthropic</option><option value="openai">OpenAI</option><option value="kimi">Kimi</option><option value="custom">Custom / OpenAI-compatible</option><option value="cli">CLI agent / local runner</option></select><p id="provider-help" class="help" hidden></p><div id="credentials" hidden><div id="custom-endpoint" hidden><label for="base-url">Base URL <span>required for automatic custom workers</span></label><input id="base-url" type="url" autocomplete="off" placeholder="https://openrouter.ai/api/v1"></div><label for="key">API key <span>optional</span></label><input type="password" id="key" autocomplete="off" placeholder="Stored in this tab only"><label for="model">Model <span>optional</span></label><input id="model" placeholder="Provider default"><p class="help">Add a key to run tasks automatically in this tab. Leave it blank to claim and submit work manually. The key is never sent to the Consortium host.</p></div><label for="room-code">Room code <span>if the host requires one</span></label><input id="room-code" autocomplete="off"><p id="join-error" class="error" role="alert"></p><button class="button primary" type="submit">Join team</button></form></dialog>
+<dialog id="task-dialog"><form id="task-form"><div class="dialog-top"><h2>Add a task</h2><button type="button" class="close" data-close="task-dialog" aria-label="Close task dialog">×</button></div><label for="task-title">Title</label><input id="task-title" required maxlength="160"><label for="task-instruction">Instruction</label><textarea id="task-instruction" required rows="5"></textarea><label for="dependencies">Depends on <span>Ctrl/Cmd-click for multiple</span></label><select id="dependencies" multiple></select><p id="task-error" class="error" role="alert"></p><button class="button primary" type="submit">Add task</button></form></dialog>
+<dialog id="invite-dialog"><div class="dialog-top"><h2>Invite a teammate</h2><button class="close" data-close="invite-dialog" aria-label="Close invite dialog">×</button></div><label for="invite-address">Workspace address</label><input id="invite-address" readonly><p class="help" id="invite-help"></p><button class="button primary" id="copy-address">Copy address</button></dialog>
+</body></html>
