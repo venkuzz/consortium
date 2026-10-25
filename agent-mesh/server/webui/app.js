@@ -100,8 +100,10 @@ document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click
 $('join').addEventListener('click', () => { $('join-error').textContent = ''; $('join-dialog').showModal(); $('owner').focus(); });
 function updateProviderFields() {
   const provider = demo ? 'mock' : $('provider').value;
-  $('credentials').hidden = provider === 'mock';
+  $('credentials').hidden = provider === 'mock' || provider === 'cli';
   $('custom-endpoint').hidden = provider !== 'custom';
+  $('provider-help').hidden = provider !== 'cli';
+  $('provider-help').textContent = provider === 'cli' ? 'CLI agents normally connect through worker/agent_client.py and run on the teammate’s computer. A browser registration remains in manual mode.' : '';
   if (provider !== 'custom') $('base-url').value = '';
   $('key').value = '';
 }
