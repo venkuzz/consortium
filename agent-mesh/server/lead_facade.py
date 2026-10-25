@@ -32,16 +32,22 @@ USING_REAL_LEAD = False
 _plan = None
 _review = None
 _summarize = None
+_configure = None  # lead_ai.configure, if available
 
 
 def _load_real_lead():
     """Try the two possible locations of Agent B's orchestrator."""
-    global _plan, _review, _summarize, USING_REAL_LEAD
+    global _plan, _review, _summarize, _configure, USING_REAL_LEAD
 
     # 1. Normal import (agent-mesh/lead on sys.path).
     try:
         from lead.orchestrator import plan as p, review as r, summarize as s  # type: ignore
         _plan, _review, _summarize = p, r, s
+        try:  # optional: lets the leader pick/supply their AI at runtime
+            from lead.lead_ai import configure as cfg  # type: ignore
+            _configure = cfg
+        except Exception:  # noqa: BLE001
+            _configure = None
         USING_REAL_LEAD = True
         return
     except Exception:  # noqa: BLE001
@@ -117,3 +123,22 @@ def review(task: dict, result: str) -> dict:
 
 def summarize(project: dict, tasks: list[dict]) -> str:
     return (_summarize or _stub_summarize)(project, tasks)
+
+
+def configure_lead(provider=None, api_key=None, model=None, base_url=None) -> dict:
+    """Let the leader choose/supply the Lead AI at runtime (used by /plan).
+
+    Returns {'ok': bool, 'provider': str|None, 'available': bool, 'note': str}.
+    If the real lead isn't loaded, this is a no-op that reports so (the stub
+    planner will be used)."""
+    if not _configure:
+        return {"ok": False, "provider": provider, "available": False,
+                "note": "runtime Lead AI config unavailable; using env/default or template."}
+    try:
+        lead = _configure(provider or None, api_key or None, model or None, base_url or None)
+        return {"ok": True, "provider": getattr(lead, "provider", None),
+                "available": bool(getattr(lead, "available", False)),
+                "note": f"Lead AI set to {getattr(lead, 'label', provider)}."}
+    except Exception as e:  # noqa: BLE001 — bad config shouldn't crash /plan
+        return {"ok": False, "provider": provider, "available": False,
+                "note": f"could not configure Lead AI ({e}); using template."}
