@@ -44,6 +44,11 @@ PROVIDER_LABELS = {
 # in-flight task is requeued. Heartbeats arrive ~every 5s (§4.3).
 WORKER_TIMEOUT = float(os.getenv("CONSORTIUM_WORKER_TIMEOUT", "30"))
 
+# Mock workers emit placeholder output, not real work. By default they cannot
+# claim tasks (so a stray Mock tab can't corrupt the queue). Opt back in with
+# CONSORTIUM_ALLOW_MOCK_WORK=1 (used by the self-test/demo).
+ALLOW_MOCK_WORK = os.getenv("CONSORTIUM_ALLOW_MOCK_WORK", "").strip() in ("1", "true", "yes")
+
 
 def _noop_broadcast(event: str, data: dict) -> None:
     pass
@@ -314,6 +319,13 @@ class Store:
             if not w:
                 return {"task": None, "error": "unknown worker"}
             w.last_seen = now()
+
+            # Mock workers produce placeholder output, not real work. By default
+            # they are not handed tasks, so a stray Mock tab can't claim and
+            # "complete" the queue with junk. Set CONSORTIUM_ALLOW_MOCK_WORK=1
+            # to re-enable (e.g. for the self-test / demo).
+            if w.provider == "mock" and not ALLOW_MOCK_WORK:
+                return {"task": None, "wait": True, "mock_blocked": True}
 
             if self._project.state in (PAUSED, DONE):
                 return {"task": None, "stop": True}

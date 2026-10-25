@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 # Allow running as a script from the agent-mesh dir.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+os.environ.setdefault("CONSORTIUM_ALLOW_MOCK_WORK", "1")  # these tests drive mock workers
 from core.store import Store, WORKER_TIMEOUT
 from core.state import (
     ACTIVE, PAUSED, DONE, QUEUED, ASSIGNED, SUBMITTED, ACCEPTED, REJECTED,
@@ -192,6 +193,30 @@ def test_rejection_rewires_dependents():
     print("  rejection rewires dependents OK (Agent B HANDOFF #2)")
 
 
+def test_mock_worker_blocked_by_default():
+    """With mock-work disabled, a mock worker is never handed a task (so a stray
+    Mock tab can't fill the queue with placeholder output)."""
+    import core.store as store_mod
+    saved = store_mod.ALLOW_MOCK_WORK
+    store_mod.ALLOW_MOCK_WORK = False
+    try:
+        s = Store()
+        s.create_project("guard")
+        s.set_state(ACTIVE)
+        s.add_task("real work", "do it")
+        m = s.register_worker("Stray", "mock").id
+        r = s.claim_next(m)
+        assert r.get("task") is None and r.get("mock_blocked"), \
+            "mock worker should be blocked from claiming"
+        # A non-mock worker still gets the task.
+        real = s.register_worker("Bob", "cli").id
+        r2 = s.claim_next(real)
+        assert r2["task"]["title"] == "real work", "real worker should still claim"
+    finally:
+        store_mod.ALLOW_MOCK_WORK = saved
+    print("  mock workers blocked from claiming by default OK")
+
+
 def test_stale_requeue():
     """A worker that goes silent has its in-flight task requeued."""
     s = Store()
@@ -219,5 +244,6 @@ if __name__ == "__main__":
     test_pause_blocks_claim()
     test_bulk_index_deps_resolved()
     test_rejection_rewires_dependents()
+    test_mock_worker_blocked_by_default()
     test_stale_requeue()
     print("ALL STORE TESTS PASSED")

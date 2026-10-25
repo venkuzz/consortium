@@ -145,8 +145,17 @@ $('join-form').addEventListener('submit', async event => {
     const data = await mutate('/api/worker/register', { owner: $('owner').value.trim(), provider, api_key: '', model: config.model, room_code: $('room-code').value.trim() });
     if (!data) return;
     setWorker(data.worker.id); $('join-dialog').close(); $('key').value = '';
-    if (provider === 'mock' || config.key) startAutomaticWorker(data.worker.id, config);
-    render(); log(`${data.worker.display} joined${automaticWorker ? ' in automatic mode' : ' in manual mode'}.`);
+    // Live backend blocks mock workers from claiming (placeholder output only),
+    // so only auto-run mock in the offline sample workspace. Real auto work
+    // needs a key; otherwise it's manual / CLI.
+    if ((provider === 'mock' && demo) || (provider !== 'mock' && config.key)) startAutomaticWorker(data.worker.id, config);
+    render();
+    if (provider === 'mock' && !demo) {
+      log(`${data.worker.display} joined as a Mock worker — Mock can't do real tasks on the live server. Use a CLI agent or a provider key.`);
+      toast('Mock workers are test-only and can\u2019t claim tasks here. Join with a CLI agent or a provider key to do real work.');
+    } else {
+      log(`${data.worker.display} joined${automaticWorker ? ' in automatic mode' : ' in manual mode'}.`);
+    }
   }
   catch (error) { $('join-error').textContent = error.message; }
 });
