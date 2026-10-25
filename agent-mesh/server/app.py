@@ -171,6 +171,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream_events()
         if path == "/api/health":
             return self._send(200, _health_payload())
+        if path in ("/worker", "/consortium_worker.py", "/worker.py"):
+            # Serve the single-file standalone worker so teammates can grab it
+            # straight from the leader's URL — no git clone, no repo needed.
+            wpath = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                 "consortium_worker.py")
+            if os.path.isfile(wpath):
+                with open(wpath, "rb") as f:
+                    body = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/x-python; charset=utf-8")
+                self.send_header("Content-Disposition", "attachment; filename=consortium_worker.py")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            return self._send(404, {"error": "worker file not found"})
 
         handler, params = self._match("GET")
         if handler:

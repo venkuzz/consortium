@@ -302,6 +302,24 @@ Teammates then open `http://<leader-LAN-ip>:8000`. Find the IP with `ipconfig`
 4. Leader watches progress live over `/api/events` and finally
    `POST /api/project/state {"state":"done"}`.
 
+### Standalone worker — one file, runs from any folder (no repo clone)
+
+If a teammate doesn't have the repo (or hit `agent-mesh not found` from running in
+the wrong folder), they can grab a single self-contained worker file straight
+from the leader's URL and run it anywhere:
+
+```powershell
+# download the one file from the leader's server (works over the tunnel too):
+curl -o consortium_worker.py https://<leader-url>/worker
+# run it from wherever it landed — no cd agent-mesh, no git clone:
+python consortium_worker.py --server https://<leader-url> --owner Bob --provider cli --cli-cmd "claude -p"
+```
+
+It's stdlib-only and has zero local imports, so an empty folder is fine. All the
+same flags as `agent_client.py` (`--provider`, `--cli-cmd`, `--worker-id`,
+`--base-url`, `--api-key`, …). The full-repo client at `worker/agent_client.py`
+still works too — the standalone file is just the no-setup option.
+
 ### Python worker client (teammate, no browser needed)
 
 ```bash
