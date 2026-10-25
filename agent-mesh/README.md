@@ -117,6 +117,92 @@ powershell -ExecutionPolicy Bypass -File .\share.ps1 -LeadProvider anthropic
 > each restart, so start it once and keep the window open. Use `-RoomCode` for a
 > shared demo, and Ctrl+C when you're done so it doesn't linger.
 
+## Connect your CLI agent to the leader (from another computer)
+
+Your CLI agent and the leader don't connect directly — both join the **same
+leader URL**, and the leader's AI routes work between everyone. A tiny relay
+(`agent_client.py`) on your machine pulls a task, pipes it to your CLI agent's
+**stdin**, and sends its **stdout** back. Your CLI tool keeps using its own
+login; no API key goes to the leader.
+
+### ⚠️ Run from the `agent-mesh` folder
+
+The `worker/agent_client.py` path is **relative to `agent-mesh/`**. If you see:
+
+```
+can't open file '...\Consortium\worker\agent_client.py': [Errno 2] No such file or directory
+```
+
+you're one directory too high. Fix it by `cd`-ing into `agent-mesh` first:
+
+```powershell
+# WRONG — missing the agent-mesh folder:
+#   cd consortium ; python worker/agent_client.py ...
+# RIGHT:
+cd "<path-to>\consortium\agent-mesh"
+python worker/agent_client.py --server https://<leader-url> --owner You --provider cli --cli-cmd "claude -p"
+```
+
+(Or run it by absolute path from anywhere:
+`python "<path>\consortium\agent-mesh\worker\agent_client.py" ...` — but you
+still need to be able to import the `worker`/`lead` packages, so `cd agent-mesh`
+is simplest.)
+
+### Full walkthrough: two computers, two CLIs, one leader
+
+**Leader (computer 1)** — start the server and a public tunnel:
+
+```powershell
+cd "<path>\consortium\agent-mesh"
+powershell -ExecutionPolicy Bypass -File .\share.ps1
+# copy the printed https://<something>.trycloudflare.com URL and share it
+```
+
+**You (computer 2)** — your CLI agent joins:
+
+```powershell
+cd "<path>\consortium\agent-mesh"
+python worker/agent_client.py --server https://<leader-url> --owner You --provider cli --cli-cmd "claude -p"
+```
+
+**Teammate (computer 3)** — their CLI agent joins the **same** URL:
+
+```powershell
+cd "<path>\consortium\agent-mesh"
+python worker/agent_client.py --server https://<leader-url> --owner Them --provider cli --cli-cmd "aider --message-file -"
+```
+
+Now the leader types a goal and clicks **Plan & launch**. Both CLIs pull tasks;
+when the leader accepts your output it becomes a dependency input for your
+teammate's task — that's how one CLI's work reaches the other, via the leader.
+
+### Requirements for the `--cli-cmd` command
+
+Your agent must run in **one-shot / print mode**: read a prompt, print the
+result, exit. Test it standalone first:
+
+```powershell
+echo "say hello in one word" | claude -p          # Claude Code
+echo "say hello" | aider --message-file -         # aider
+```
+
+- The task instruction is piped to **stdin** automatically. If your tool takes
+  the prompt as an argument instead, put `{prompt}` in the command and it'll be
+  substituted: `--cli-cmd "my-agent --task {prompt}"`.
+- Slow agent (big local model, etc.)? Raise the timeout before launching
+  (default 300s):
+
+  ```powershell
+  $env:CONSORTIUM_CLI_TIMEOUT = "900"   # 15 minutes
+  python worker/agent_client.py --server https://<leader-url> --owner You --provider cli --cli-cmd "ollama run qwen3-coder:30b"
+  ```
+
+- No API key is ever sent to the leader — your CLI tool authenticates itself.
+
+> Want a model API instead of a CLI tool? Use `--provider anthropic|openai|kimi`
+> (key stays local), or `--provider custom --base-url <openai-compatible-url>
+> --model <name>` for anything else (OpenRouter, Groq, local Ollama's `/v1`, …).
+
 ## API
 
 The full, frozen HTTP + SSE contract is **`WORK_SPLIT.md` §4**. The frontend is
