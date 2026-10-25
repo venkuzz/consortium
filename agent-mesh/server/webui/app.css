@@ -97,7 +97,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .connection.online::before {
   background: var(--success);
   box-shadow: 0 0 0 3px rgba(111, 197, 167, .11);
-  animation: statusPulse 2.8s ease-in-out infinite;
+  animation: statusPulse 4.8s ease-in-out infinite;
 }
 .connection.demo::before { background: var(--accent); box-shadow: 0 0 0 3px rgba(150, 148, 255, .11); }
 
@@ -212,13 +212,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .network-mark {
   position: relative;
   display: block;
-  width: 57px;
-  height: 57px;
+  width: 52px;
+  height: 52px;
   color: transparent;
-  border: 1px solid #34394c;
+  border: 1px solid rgba(92, 98, 122, .5);
   border-radius: 50%;
   transform: rotate(-18deg);
-  animation: sidebarOrbit 24s linear infinite;
+  opacity: .68;
+  animation: sidebarOrbit 80s linear infinite;
   backface-visibility: hidden;
   will-change: transform;
 }
@@ -226,10 +227,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   content: "";
   position: absolute;
   inset: 9px -7px;
-  border: 1px solid rgba(150, 148, 255, .55);
+  border: 1px solid rgba(150, 148, 255, .34);
   border-radius: 50%;
 }
-.network-mark::after { inset: -7px 9px; border-color: rgba(150, 148, 255, .24); }
+.network-mark::after { inset: -7px 9px; border-color: rgba(150, 148, 255, .14); }
 .sidebar-note p {
   margin: 22px 0 8px;
   color: #aaaeba;
@@ -257,55 +258,100 @@ main { min-width: 0; padding: 54px clamp(28px, 4vw, 68px) 22px; }
   position: absolute;
   right: -6px;
   top: -38px;
-  width: 154px;
-  height: 154px;
+  width: 162px;
+  height: 162px;
   contain: layout paint;
-  opacity: .88;
+  opacity: .9;
   pointer-events: none;
-  animation: shapeFloat 9s ease-in-out infinite alternate;
+  animation: shapeFloat 18s ease-in-out infinite alternate;
   will-change: transform;
 }
 .flow-shape svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.flow-traces, .flow-echo, .flow-map { fill: none; }
-.flow-traces use {
-  stroke: rgba(150, 148, 255, .28);
-  stroke-width: 1;
+.orbit-shell {
+  transform-origin: 120px 120px;
+  transform-box: view-box;
+  will-change: transform;
+}
+.shell-a { animation: shellA 58s linear infinite; }
+.shell-b { animation: shellB 74s linear infinite; }
+.shell-c { animation: shellC 92s linear infinite; }
+.orbit-line, .orbit-glint {
+  fill: none;
   vector-effect: non-scaling-stroke;
 }
-.flow-traces use:nth-child(2) { stroke: rgba(180, 178, 255, .18); }
-.flow-traces use:nth-child(3) { stroke: rgba(150, 148, 255, .12); stroke-dasharray: 2 5; }
-.flow-traces use:nth-child(4) { stroke: rgba(180, 178, 255, .17); }
-.flow-echo use {
-  stroke: rgba(180, 178, 255, .7);
+.orbit-line {
+  stroke: rgba(160, 158, 255, .27);
+  stroke-width: .9;
+}
+.shell-b .orbit-line { stroke: rgba(183, 181, 255, .18); }
+.shell-c .orbit-line { stroke: rgba(126, 132, 190, .21); }
+.orbit-glint {
+  stroke: rgba(206, 204, 255, .74);
   stroke-width: 1.2;
   stroke-linecap: round;
-  stroke-dasharray: 1 99;
-  animation: traceSignal 7s linear infinite;
+  stroke-dasharray: 3 97;
+  animation: orbitGlint 18s linear infinite;
 }
-.flow-echo use:nth-child(2) { animation-delay: -3.5s; animation-duration: 9s; }
-.flow-particles circle, .flow-heart {
+.shell-b .orbit-glint { animation-duration: 24s; }
+.shell-c .orbit-glint { animation-duration: 31s; }
+.orbit-particle, .kernel-heart {
   fill: #c3c1ff;
-  filter: drop-shadow(0 0 4px rgba(150, 148, 255, .8));
+  filter: drop-shadow(0 0 4px rgba(150, 148, 255, .72));
 }
-.flow-particles circle:nth-child(2n) { fill: #7078b8; }
-.flow-map {
+.muted-particle { fill: #777fbd; opacity: .76; }
+.flow-kernel {
   transform-origin: 120px 120px;
-  animation: mapBreathe 7s ease-in-out infinite alternate;
+  transform-box: view-box;
+  animation: kernelBreathe 14s ease-in-out infinite alternate;
 }
-.flow-map path { stroke: rgba(111, 116, 161, .23); stroke-width: .7; }
-.flow-map circle { fill: #0b0d13; stroke: rgba(180, 178, 255, .65); stroke-width: .8; }
-.flow-heart { transform-origin: 120px 120px; }
-@keyframes traceSignal {
+.kernel-halo {
+  fill: none;
+  stroke: rgba(150, 148, 255, .2);
+  stroke-width: .8;
+  stroke-dasharray: 2 5;
+}
+.flow-kernel path {
+  fill: none;
+  stroke: rgba(111, 116, 161, .28);
+  stroke-width: .75;
+}
+.kernel-node {
+  fill: #0b0d13;
+  stroke: rgba(180, 178, 255, .58);
+  stroke-width: .8;
+}
+.kernel-heart {
+  transform-origin: 120px 120px;
+  transform-box: view-box;
+  animation: kernelPulse 6s ease-in-out infinite;
+}
+@keyframes shellA {
+  from { transform: rotate(12deg); }
+  to { transform: rotate(372deg); }
+}
+@keyframes shellB {
+  from { transform: rotate(68deg); }
+  to { transform: rotate(-292deg); }
+}
+@keyframes shellC {
+  from { transform: rotate(-34deg); }
+  to { transform: rotate(326deg); }
+}
+@keyframes orbitGlint {
   from { stroke-dashoffset: 100; }
   to { stroke-dashoffset: 0; }
 }
-@keyframes mapBreathe {
-  from { opacity: .38; transform: rotate(-3deg) scale(.94); }
-  to { opacity: .8; transform: rotate(4deg) scale(1.04); }
+@keyframes kernelBreathe {
+  from { opacity: .5; transform: rotate(-4deg) scale(.95); }
+  to { opacity: .92; transform: rotate(4deg) scale(1.035); }
+}
+@keyframes kernelPulse {
+  0%, 100% { opacity: .58; transform: scale(.82); }
+  50% { opacity: 1; transform: scale(1.08); }
 }
 @keyframes shapeFloat {
-  from { transform: translate3d(0, -3px, 0) rotate(-1deg); }
-  to { transform: translate3d(-5px, 6px, 0) rotate(2deg); }
+  from { transform: translate3d(0, -2px, 0) rotate(-.5deg); }
+  to { transform: translate3d(-4px, 4px, 0) rotate(1deg); }
 }
 @keyframes sidebarOrbit {
   from { transform: rotate(-18deg); }
@@ -449,7 +495,7 @@ textarea::placeholder, input::placeholder { color: #525866; }
   border-radius: 50%;
   background: var(--accent-soft);
   box-shadow: 0 0 13px rgba(150, 148, 255, .7);
-  animation: progressSignal 2.4s ease-in-out infinite;
+  animation: progressSignal 4.8s ease-in-out infinite;
 }
 @keyframes progressSignal {
   0%, 100% { opacity: .55; transform: scale(.75); }
@@ -517,8 +563,8 @@ textarea::placeholder, input::placeholder { color: #525866; }
 .task-symbol { color: #687080; font-family: var(--serif); font-size: 17px; line-height: 18px; }
 .task-symbol.accepted { color: var(--success); }
 .task-symbol.rejected { color: var(--danger); }
-.task-symbol.assigned { color: var(--accent); animation: assignmentSignal 1.7s ease-in-out infinite; }
-.task-symbol.submitted { color: var(--warning); animation: reviewSignal 2.2s ease-in-out infinite; }
+.task-symbol.assigned { color: var(--accent); animation: assignmentSignal 3.4s ease-in-out infinite; }
+.task-symbol.submitted { color: var(--warning); animation: reviewSignal 4.2s ease-in-out infinite; }
 @keyframes assignmentSignal {
   0%, 100% { opacity: .48; transform: rotate(-18deg) scale(.86); }
   50% { opacity: 1; transform: rotate(18deg) scale(1.08); }
@@ -553,7 +599,7 @@ textarea::placeholder, input::placeholder { color: #525866; }
   stroke-width: 1.2;
   stroke-linecap: round;
   stroke-dasharray: 4 5;
-  animation: queueRoute 14s linear infinite;
+  animation: queueRoute 32s linear infinite;
 }
 .queue-stations circle {
   fill: #0d1016;
@@ -561,7 +607,7 @@ textarea::placeholder, input::placeholder { color: #525866; }
   stroke-width: 1;
   transform-box: fill-box;
   transform-origin: center;
-  animation: stationPulse 3.2s ease-in-out infinite;
+  animation: stationPulse 6.5s ease-in-out infinite;
 }
 .queue-stations circle:nth-child(2) { animation-delay: -1.1s; }
 .queue-stations circle:nth-child(3) { animation-delay: -2.2s; }
@@ -597,14 +643,14 @@ textarea::placeholder, input::placeholder { color: #525866; }
   stroke-width: .8;
   stroke-linecap: round;
 }
-.inspector-links use:nth-child(2) { stroke-dasharray: 3 5; animation: inspectorTrace 18s linear infinite; }
+.inspector-links use:nth-child(2) { stroke-dasharray: 3 5; animation: inspectorTrace 36s linear infinite; }
 .inspector-cells circle {
   fill: #0a0d12;
   stroke: #7377b7;
   stroke-width: .9;
   transform-box: fill-box;
   transform-origin: center;
-  animation: cellSignal 4.2s ease-in-out infinite;
+  animation: cellSignal 7.5s ease-in-out infinite;
 }
 .inspector-cells circle:nth-child(2n) { animation-delay: -1.4s; }
 .inspector-cells circle:nth-child(3n) { animation-delay: -2.8s; }
@@ -841,5 +887,5 @@ dialog .button { width: 100%; margin-top: 20px; }
     animation-duration: .001ms !important;
     animation-iteration-count: 1 !important;
   }
-  .flow-particles, .flow-heart, .queue-packet, .inspector-packets { display: none; }
+  .orbit-particle, .kernel-heart, .queue-packet, .inspector-packets { display: none; }
 }
