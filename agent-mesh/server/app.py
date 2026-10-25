@@ -25,6 +25,7 @@ import os
 import re
 import json
 import time
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from core.store import Store
@@ -53,6 +54,39 @@ HUB = SSEHub()
 STORE = Store(broadcast=HUB.broadcast)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui")
+
+_START_TIME = time.time()
+
+
+def _lan_ip() -> str:
+    """Best-effort primary LAN IP (the address teammates should use).
+
+    Opens a throwaway UDP socket toward a public IP so the OS picks the
+    outbound interface; no packets are actually sent. Falls back to loopback.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:  # noqa: BLE001 — offline / no route
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def _health_payload() -> dict:
+    """Lightweight liveness probe (GET /api/health). Used by teammates to
+    confirm reachability before joining, and by scripts/monitors."""
+    proj = STORE.get_project()
+    return {
+        "ok": True,
+        "service": "consortium",
+        "time": round(time.time(), 2),
+        "uptime": round(time.time() - _START_TIME, 2),
+        "project_state": proj.state if proj else None,
+        "workers_online": STORE.workers_online(),
+        "sse_clients": HUB.count(),
+    }
 
 # ── route table: (method, compiled_path_regex) -> handler(store, body, params)
 # Path params use named groups, e.g. (?P<id>[^/]+).
@@ -134,6 +168,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self._path_only()
         if path == "/api/events":
             return self._stream_events()
+        if path == "/api/health":
+            return self._send(200, _health_payload())
 
         handler, params = self._match("GET")
         if handler:
@@ -245,10 +281,26 @@ curl -X POST http://localhost:8000/api/project/plan -d '{}'</pre>
 
 def main():
     port = int(os.getenv("PORT", "8000"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"Consortium server running at http://0.0.0.0:{port}")
-    print(f"Teammates on the LAN join at  http://<your-LAN-ip>:{port}")
-    print("API contract: WORK_SPLIT.md §4   |   live stream: GET /api/events")
+    host = os.getenv("HOST", "0.0.0.0")
+    server = ThreadingHTTPServer((host, port), Handler)
+    lan = _lan_ip()
+    bar = "─" * 54
+    print(bar)
+    print("  Consortium — mission control is live")
+    print(bar)
+    print(f"  Leader (this machine):  http://localhost:{port}")
+    print(f"  Teammates on the LAN:   http://{lan}:{port}")
+    print(f"  Reachability check:     http://{lan}:{port}/api/health")
+    print(f"  Live event stream:      http://{lan}:{port}/api/events")
+    print(bar)
+    print("  Teammates: open the LAN URL in a browser, or run")
+    print(f"    python worker/agent_client.py --server http://{lan}:{port} \\")
+    print("        --owner <name> --provider mock")
+    print(bar)
+    print("  If a teammate can't connect, open the firewall for this port:")
+    print(f"    New-NetFirewallRule -DisplayName 'Consortium {port}' \\")
+    print(f"      -Direction Inbound -Protocol TCP -LocalPort {port} -Action Allow")
+    print(bar)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
