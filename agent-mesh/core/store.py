@@ -36,6 +36,7 @@ PROVIDER_LABELS = {
     "openai": "Codex",
     "kimi": "Kimi",
     "custom": "Custom AI",
+    "cli": "CLI agent",
     "mock": "Mock",
 }
 

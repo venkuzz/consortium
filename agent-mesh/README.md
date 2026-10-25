@@ -224,6 +224,52 @@ python worker/agent_client.py --server http://<leader-ip>:8000 --owner Alice --p
 # real AI:  --provider anthropic   (key stays on the teammate's machine)
 ```
 
+### Use your own CLI agent as the worker (no API key — "most CLI")
+
+A teammate can plug in their **existing command-line agent** — Claude Code,
+Codex CLI, Gemini CLI, aider, or any script — instead of handing over a model
+API key. The lead's instruction is piped to the command on **stdin** (or
+substituted for `{prompt}`); the command's **stdout** becomes the result. The
+CLI tool uses its own auth, so nothing secret leaves the teammate's machine.
+
+```bash
+# Claude Code in print mode:
+python worker/agent_client.py --server https://<tunnel-or-ip> --owner Bob \
+    --provider cli --cli-cmd "claude -p"
+
+# aider (reads the task from stdin):
+python worker/agent_client.py --server https://<tunnel> --owner Carol \
+    --provider cli --cli-cmd "aider --message-file -"
+
+# any custom script that reads a prompt and prints a deliverable:
+python worker/agent_client.py --server https://<tunnel> --owner Dave \
+    --provider cli --cli-cmd "./my-agent.sh {prompt}"
+```
+
+This works over the Cloudflare tunnel too — point `--server` at the
+`https://…trycloudflare.com` URL and the CLI agent participates from anywhere,
+no inbound firewall rule needed. Set `CONSORTIUM_CLI_TIMEOUT` (seconds, default
+300) if your agent is slow.
+
+### Bring any API key (any OpenAI-compatible provider)
+
+Beyond the built-in `anthropic`/`openai`/`kimi`, the `custom` provider accepts a
+key for **any OpenAI-compatible endpoint** — OpenRouter, Groq, Together,
+DeepSeek, Fireworks, or a local Ollama/LM Studio/vLLM server:
+
+```bash
+python worker/agent_client.py --server https://<tunnel> --owner Erin \
+    --provider custom --base-url https://openrouter.ai/api/v1 \
+    --model meta-llama/llama-3.1-8b-instruct --api-key sk-or-...
+# local model, no key:
+python worker/agent_client.py --server http://<ip>:8000 --owner Finn \
+    --provider custom --base-url http://localhost:11434/v1 --model llama3.1
+```
+
+In the browser join panel, pick **Custom · any OpenAI-compatible** and fill in
+the base URL + model. (The `cli` provider is terminal-only — it needs shell
+access, so use the Python client for it.)
+
 ### Lead auto-reviewer (optional, runs on the leader's side)
 
 Without review, dependent tasks (e.g. the final integration task) never unblock.

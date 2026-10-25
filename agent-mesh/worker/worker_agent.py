@@ -2,7 +2,14 @@
 Uniform Worker AI wrapper (same pattern as `agent-mesh/agents.py`).
 
 `run_worker()` never raises: failures become ok=False so the client can still
-submit and the lead can reject/requeue. Providers: anthropic | openai | kimi | mock.
+submit and the lead can reject/requeue.
+Providers: anthropic | openai | kimi | custom | cli | mock.
+
+The `cli` provider drives the teammate's OWN command-line agent (Claude Code,
+Codex CLI, aider, or any script) instead of calling a model API: the lead's
+instruction is piped to the command on stdin and its stdout becomes the result.
+No model API key is involved — the CLI tool uses its own auth. This is the
+"most CLI" path: a teammate's existing terminal agent becomes a mesh worker.
 """
 from __future__ import annotations
 
@@ -10,6 +17,8 @@ import os
 import re
 import sys
 import time
+import shlex
+import subprocess
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,6 +27,11 @@ from lead import prompts  # noqa: E402
 from lead.lead_ai import PROVIDERS, complete  # noqa: E402
 
 MOCK_DELAY = float(os.getenv("MOCK_DELAY", "1.0"))
+# Default command for the `cli` provider; override via --cli-cmd / CONSORTIUM_CLI_CMD.
+# "{prompt}" (if present) is substituted with the instruction; otherwise the
+# prompt is piped to the command's stdin.
+CLI_CMD = os.getenv("CONSORTIUM_CLI_CMD", "")
+CLI_TIMEOUT = float(os.getenv("CONSORTIUM_CLI_TIMEOUT", "300"))
 _FENCE = re.compile(r"^```[\w+-]*[ \t]*\n(.*?)\n?```$", re.DOTALL)
 
 
@@ -51,25 +65,83 @@ def _mock_output(title: str, instruction: str) -> str:
     return f"[mock result] Completed: {title or instruction[:60]}"
 
 
+def _build_cli_prompt(project: dict, title: str, instruction: str,
+                      dependency_outputs: list[tuple[str, str]]) -> str:
+    """A self-contained prompt for a CLI agent (no system/user split)."""
+    parts = [
+        "You are a worker on a collaborative build team. Do exactly the task below",
+        "and output ONLY the resulting deliverable (no preamble, no commentary).",
+        "",
+        f"Project goal: {project.get('goal', '')}",
+    ]
+    if project.get("summary"):
+        parts.append(f"Progress so far: {project['summary']}")
+    parts += ["", f"Task: {title}", f"Instruction:\n{instruction}"]
+    for dep_title, dep_out in dependency_outputs or []:
+        parts.append(f"\n--- output of dependency '{dep_title}' ---\n{dep_out}")
+    return "\n".join(parts)
+
+
+def _run_cli(cmd: str, prompt: str) -> str:
+    """Drive a teammate's own CLI agent. The prompt is substituted into {prompt}
+    if the command contains that token, otherwise piped to stdin. stdout is the
+    result. The CLI tool handles its own auth — no model API key here.
+
+    Tokenized with POSIX rules on all platforms so wrapping quotes around an
+    argument (e.g. `-c "..."`) are stripped correctly. On Windows this means
+    backslash path separators in the command must be quoted or written with
+    forward slashes; real CLI agents (claude/aider/codex) are bare PATH names,
+    so this is rarely an issue."""
+    if not cmd:
+        raise ValueError("cli provider needs a command (set --cli-cmd / CONSORTIUM_CLI_CMD), "
+                         "e.g. 'claude -p' or 'aider --message-file -'")
+    if "{prompt}" in cmd:
+        argv = shlex.split(cmd.replace("{prompt}", _q(prompt)), posix=True)
+        stdin_data = None
+    else:
+        argv = shlex.split(cmd, posix=True)
+        stdin_data = prompt
+    try:
+        proc = subprocess.run(argv, input=stdin_data, capture_output=True,
+                              text=True, timeout=CLI_TIMEOUT)
+    except FileNotFoundError:
+        raise ValueError(f"CLI command not found: {argv[0]!r}")
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"CLI agent timed out after {CLI_TIMEOUT:.0f}s")
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 and not out:
+        raise ValueError(f"CLI agent exited {proc.returncode}: {(proc.stderr or '')[:300]}")
+    return out
+
+
+def _q(s: str) -> str:
+    """Quote a prompt for {prompt}-substitution so it survives POSIX shlex.split."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
 def run_worker(provider: str, task: dict, project: Optional[dict] = None,
                dependency_outputs: Optional[list[tuple[str, str]]] = None,
                api_key: Optional[str] = None, model: Optional[str] = None,
-               base_url: Optional[str] = None) -> dict:
+               base_url: Optional[str] = None, cli_cmd: Optional[str] = None) -> dict:
     """Execute one task with the worker's AI.
 
     -> {'ok': bool, 'output': str, 'error': str, 'elapsed': float}
     (matches the body of POST /api/worker/{id}/submit minus task_id).
-    `base_url` is used by provider='custom' to target any OpenAI-compatible API."""
+    `base_url` targets any OpenAI-compatible API for provider='custom'.
+    `cli_cmd` is the command to run for provider='cli' (teammate's own agent)."""
     start = time.time()
     title = task.get("title", "")
     instruction = task.get("instruction", "")
     try:
         if provider not in PROVIDERS:
             raise ValueError(f"unknown provider {provider!r}")
+        project = project or {}
         if provider == "mock":
             out = _mock_output(title, instruction)
+        elif provider == "cli":
+            prompt = _build_cli_prompt(project, title, instruction, dependency_outputs or [])
+            out = strip_fence(_run_cli(cli_cmd or CLI_CMD, prompt))
         else:
-            project = project or {}
             user = prompts.worker_user(project.get("goal", ""), project.get("summary", ""),
                                        title, instruction, dependency_outputs or [])
             out = strip_fence(complete(provider, prompts.WORKER_SYSTEM, user, api_key, model,
