@@ -25,7 +25,8 @@ def register(store, body, params):
         return 400, {"error": "owner required"}
     if provider not in PROVIDER_LABELS:
         return 400, {"error": f"unknown provider (use one of {list(PROVIDER_LABELS)})"}
-    w = store.register_worker(owner, provider, body.get("api_key"), body.get("model"))
+    w = store.register_worker(owner, provider, body.get("api_key"), body.get("model"),
+                              worker_id=(body.get("worker_id") or "").strip() or None)
     proj = store.get_project()
     return 200, {
         "worker": {"id": w.id, "display": w.display,
