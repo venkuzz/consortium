@@ -656,9 +656,7 @@ textarea::placeholder, input::placeholder { color: #525866; }
   margin: 0 auto 7px;
   overflow: visible;
 }
-.cube-faces path:first-child { fill: rgba(150, 148, 255, .035); }
-.cube-faces path:nth-child(2) { fill: rgba(150, 148, 255, .018); }
-.cube-faces path:nth-child(3) { fill: rgba(111, 116, 161, .045); }
+.cube-flow { background: transparent; }
 .cube-edges path {
   fill: none;
   stroke: #484e68;
@@ -666,7 +664,6 @@ textarea::placeholder, input::placeholder { color: #525866; }
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
-.cube-edges .cube-hidden { stroke: #2d3244; stroke-dasharray: 3 5; }
 .cube-vertices circle {
   fill: #0a0d12;
   stroke: #7e81bc;
@@ -677,6 +674,7 @@ textarea::placeholder, input::placeholder { color: #525866; }
 }
 .cube-vertices circle:nth-child(2n) { animation-delay: -2s; }
 .cube-vertices circle:nth-child(3n) { animation-delay: -4s; }
+.cube-vertices .coincident-vertex { fill: var(--accent-soft); stroke: none; opacity: .52; animation: none; }
 .cube-packets circle {
   fill: var(--accent-soft);
   filter: drop-shadow(0 0 5px rgba(150, 148, 255, .7));
