@@ -75,7 +75,8 @@ class Task:
     title: str                # short label
     instruction: str          # full instruction text from the Lead AI
     state: str                # QUEUED/ASSIGNED/SUBMITTED/ACCEPTED/REJECTED
-    assigned_to: Optional[str] = None   # worker id
+    assigned_to: Optional[str] = None   # worker id that CLAIMED it (set at claim)
+    assignee: Optional[str] = None      # worker id the leader PINNED it to (preference)
     result: str = ""          # worker's submitted output
     review_note: str = ""     # lead's note on accept/reject
     depends_on: list[str] = field(default_factory=list)  # task ids

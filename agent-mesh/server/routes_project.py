@@ -88,7 +88,7 @@ def list_tasks(store, body, params):
     return 200, {"tasks": [t.to_dict() for t in tasks]}
 
 
-# POST /api/tasks   {title, instruction, depends_on?}
+# POST /api/tasks   {title, instruction, depends_on?, assignee?}
 def add_task(store, body, params):
     if not store.get_project():
         return 400, {"error": "no project"}
@@ -96,7 +96,19 @@ def add_task(store, body, params):
     instruction = (body.get("instruction") or "").strip()
     if not title or not instruction:
         return 400, {"error": "title and instruction required"}
-    task = store.add_task(title, instruction, body.get("depends_on") or [])
+    assignee = (body.get("assignee") or "").strip() or None
+    task = store.add_task(title, instruction, body.get("depends_on") or [], assignee)
+    return 200, {"task": task.to_dict()}
+
+
+# POST /api/tasks/{id}/assign   {worker_id}  (worker_id null/"" clears the pin)
+def assign_task(store, body, params):
+    task_id = params.get("id")
+    worker_id = (body.get("worker_id") or "").strip() or None
+    try:
+        task = store.assign_task(task_id, worker_id)
+    except ValueError as e:
+        return 400, {"error": str(e)}
     return 200, {"task": task.to_dict()}
 
 
