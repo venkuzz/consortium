@@ -177,6 +177,63 @@ class WorkerAgentTests(unittest.TestCase):
                 os.environ["KIMI_API_KEY"] = saved
 
 
+class ProviderTests(unittest.TestCase):
+    """kimi (and openai) go through the OpenAI-compatible path; exercise it against a fake."""
+
+    def setUp(self):
+        self.seen = []
+        seen = self.seen
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                seen.append((self.path, self.headers.get("Authorization"), body))
+                data = json.dumps({"choices": [{"message": {
+                    "content": "```html\n<p>hi from kimi</p>\n```"}}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.saved_url = lead_ai.KIMI_BASE_URL
+        lead_ai.KIMI_BASE_URL = f"http://127.0.0.1:{self.httpd.server_address[1]}/v1"
+
+    def tearDown(self):
+        lead_ai.KIMI_BASE_URL = self.saved_url
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def test_kimi_worker_hits_openai_compatible_endpoint(self):
+        r = worker_agent.run_worker("kimi", {"title": "T", "instruction": "say hi"},
+                                    {"goal": "G"}, [("Dep", "dep-out")], api_key="k-1",
+                                    model="kimi-test")
+        self.assertTrue(r["ok"], r["error"])
+        self.assertEqual(r["output"], "<p>hi from kimi</p>")  # fence stripped
+        path, auth, body = self.seen[0]
+        self.assertEqual(path, "/v1/chat/completions")
+        self.assertEqual(auth, "Bearer k-1")
+        self.assertEqual(body["model"], "kimi-test")
+        self.assertEqual(body["messages"][0]["role"], "system")
+        user = body["messages"][1]["content"]
+        self.assertIn("G", user)
+        self.assertIn("dep-out", user)
+        self.assertIn("say hi", user)
+
+    def test_kimi_lead_plans(self):
+        lead = lead_ai.LeadAI("kimi", api_key="k-2")
+        self.assertTrue(lead.available)
+        self.assertIn("hi from kimi", lead.complete("sys", "user"))
+
+    def test_strip_fence_leaves_plain_text(self):
+        self.assertEqual(worker_agent.strip_fence("a ```x``` b"), "a ```x``` b")
+        self.assertEqual(worker_agent.strip_fence("```\ncode\n```"), "code")
+
+
 # ---------- fake §4 server for the client loop ----------
 
 class FakeServer:
@@ -274,6 +331,7 @@ class FakeServer:
 
     def close(self):
         self.httpd.shutdown()
+        self.httpd.server_close()
 
 
 class ClientLoopTests(unittest.TestCase):
