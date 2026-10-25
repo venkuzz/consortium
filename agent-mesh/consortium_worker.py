@@ -169,8 +169,15 @@ def execute(provider, task, project, dep_outputs, api_key, model, base_url, cli_
         if provider == "mock":
             out = _mock(title, instruction)
         elif provider == "cli":
-            out = strip_fence(_run_cli(cli_cmd or os.getenv("CONSORTIUM_CLI_CMD", ""),
-                                       _build_prompt(project, title, instruction, dep_outputs)))
+            cli_context = (
+                "You are running inside the worker's current directory. If the task concerns "
+                "repository files, inspect and edit them directly and run relevant checks. "
+                "Do not push or merge unless explicitly requested. End with a concise summary "
+                "of the completed work and checks; that final response is sent to the lead.\n\n"
+            )
+            out = strip_fence(_run_cli(
+                cli_cmd or os.getenv("CONSORTIUM_CLI_CMD", ""),
+                cli_context + _build_prompt(project, title, instruction, dep_outputs)))
         else:
             key = api_key or os.getenv(
                 {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",

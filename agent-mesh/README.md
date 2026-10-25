@@ -51,7 +51,9 @@ The fastest path is the UI:
 4. Copy the generated two-line command to the teammate.
 
 The command downloads one self-contained worker file and runs it from any
-folder. The teammate does not need this repository.
+folder. For coding tasks, the teammate should run it from their own project
+checkout or worktree; the CLI agent edits that working directory. The teammate
+does not need the Consortium repository.
 
 Claude Code:
 

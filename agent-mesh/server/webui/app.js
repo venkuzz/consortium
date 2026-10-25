@@ -219,7 +219,7 @@ $('cli-form').addEventListener('submit', async event => {
     $('cli-generated').value =
       `# Windows (PowerShell):\n${winCmd}\n\n# macOS / Linux:\n${nixCmd}`;
     $('cli-command-box').hidden = false;
-    $('cli-status').textContent = `Task pinned to ${reg.worker.display}. Send them the line for their OS \u2014 one paste downloads the worker and boots their CLI, which then pulls the task automatically.`;
+    $('cli-status').textContent = `Task pinned to ${reg.worker.display}. Have them open their project checkout or worktree, then paste the line for their OS. It downloads the worker and boots their CLI in that directory.`;
     log(`Reserved CLI worker for ${owner} and pinned "${task.title}".`);
   } catch (error) { $('cli-status').textContent = ''; $('cli-error').textContent = error.message; }
 });

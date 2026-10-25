@@ -35,6 +35,15 @@ def test_cli_stdin():
     print("  cli via stdin OK:", r["output"][:60])
 
 
+def test_cli_prompt_tells_coding_agents_to_edit_the_checkout():
+    agent = f'{PY} -c "import sys;print(sys.stdin.read())"'
+    task = {"title": "Fix", "instruction": "Update app.py"}
+    r = run_worker("cli", task, {"goal": "Ship it"}, cli_cmd=agent)
+    assert r["ok"], r["error"]
+    assert "edit those files directly" in r["output"]
+    assert "Do not push or merge unless" in r["output"]
+
+
 def test_cli_prompt_substitution():
     """{prompt} token in the command is replaced with the instruction text."""
     agent = f'{PY} -c "import sys;print(\'got:\'+sys.argv[1][:20])" {{prompt}}'
@@ -71,6 +80,7 @@ if __name__ == "__main__":
     print("=== cli worker provider tests ===")
     test_cli_in_providers()
     test_cli_stdin()
+    test_cli_prompt_tells_coding_agents_to_edit_the_checkout()
     test_cli_prompt_substitution()
     test_cli_missing_command()
     test_cli_command_not_found()

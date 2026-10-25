@@ -69,8 +69,11 @@ def _build_cli_prompt(project: dict, title: str, instruction: str,
                       dependency_outputs: list[tuple[str, str]]) -> str:
     """A self-contained prompt for a CLI agent (no system/user split)."""
     parts = [
-        "You are a worker on a collaborative build team. Do exactly the task below",
-        "and output ONLY the resulting deliverable (no preamble, no commentary).",
+        "You are a worker on a collaborative build team. Do exactly the task below.",
+        "You are running inside the worker's current directory. If the task concerns",
+        "repository files, inspect and edit those files directly and run relevant checks.",
+        "Do not push or merge unless the task explicitly requests it. End with a concise",
+        "summary of the completed work and checks; that final response is sent to the lead.",
         "",
         f"Project goal: {project.get('goal', '')}",
     ]
