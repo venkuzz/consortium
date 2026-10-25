@@ -125,6 +125,40 @@ def test_pause_blocks_claim():
     print("  pause/done block claim OK")
 
 
+def test_bulk_index_deps_resolved():
+    """Agent B's orchestrator.plan() returns depends_on as 0-based INDEXES into
+    the task list (§6). add_tasks_bulk must map them to real task ids."""
+    s = Store()
+    s.create_project("plan deps")
+    specs = [
+        {"title": "HTML", "instruction": "html", "depends_on": []},
+        {"title": "CSS", "instruction": "css", "depends_on": []},
+        {"title": "Copy", "instruction": "copy", "depends_on": []},
+        {"title": "JS", "instruction": "js", "depends_on": []},
+        # the integrate task depends on the first four BY INDEX
+        {"title": "Integrate", "instruction": "assemble", "depends_on": [0, 1, 2, 3]},
+    ]
+    tasks = s.add_tasks_bulk(specs)
+    integrate = tasks[-1]
+    first_four_ids = [t.id for t in tasks[:4]]
+    assert integrate.depends_on == first_four_ids, \
+        f"index deps not resolved to ids: {integrate.depends_on}"
+    # And they must actually gate: integrate shouldn't be claimable until the
+    # first four are accepted.
+    s.set_state(ACTIVE)
+    w = s.register_worker("z", "mock").id
+    claimed = []
+    for _ in range(4):
+        r = s.claim_next(w)
+        assert r["task"]["id"] in first_four_ids
+        claimed.append(r["task"]["id"])
+        s.submit(w, r["task"]["id"], "out")
+        s.review(r["task"]["id"], ACCEPTED)
+    r = s.claim_next(w)
+    assert r["task"]["id"] == integrate.id, "integrate should unlock after deps accepted"
+    print("  bulk index-dep resolution OK (Agent B /plan contract)")
+
+
 def test_stale_requeue():
     """A worker that goes silent has its in-flight task requeued."""
     s = Store()
@@ -150,5 +184,6 @@ if __name__ == "__main__":
     test_dependency_gating()
     test_submit_review_followup()
     test_pause_blocks_claim()
+    test_bulk_index_deps_resolved()
     test_stale_requeue()
     print("ALL STORE TESTS PASSED")

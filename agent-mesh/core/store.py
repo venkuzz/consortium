@@ -128,14 +128,25 @@ class Store:
         return task
 
     def add_tasks_bulk(self, specs: list[dict]) -> list[Task]:
-        """Used by /plan. specs: [{title, instruction, depends_on?}]. Emits one
-        tasks_planned event with the whole batch (cleaner for the UI)."""
+        """Used by /plan. specs: [{title, instruction, depends_on?}].
+
+        INTEGRATION CONTRACT with Agent B's orchestrator.plan() (§6): in the
+        returned specs, `depends_on` holds 0-based INDEXES into this same specs
+        list (task ids don't exist until we create them here). We map those
+        indexes to the real task ids as we go. For resilience we ALSO accept
+        entries that are already real task ids (strings matching an id we just
+        created), so a caller passing real ids still works.
+
+        Emits one tasks_planned event with the whole batch (cleaner for the UI).
+        """
         created: list[Task] = []
         with self._lock:
             if not self._project:
                 raise ValueError("no project")
-            # Allow plan to translate seq-relative deps: callers pass real ids
-            # or leave empty. We append in order.
+            # First pass: create tasks with placeholder deps, remember the id
+            # assigned at each position so we can resolve index deps after.
+            position_to_id: list[str] = []
+            raw_deps: list[list] = []
             for spec in specs:
                 self._task_seq += 1
                 tid = "t_%02d" % self._task_seq
@@ -144,11 +155,27 @@ class Store:
                     id=tid, project_id=self._project.id, seq=self._task_seq,
                     title=spec.get("title", f"Task {self._task_seq}"),
                     instruction=spec.get("instruction", ""), state=QUEUED,
-                    depends_on=list(spec.get("depends_on") or []),
-                    created_at=t, updated_at=t,
+                    depends_on=[], created_at=t, updated_at=t,
                 )
                 self._tasks[tid] = task
                 created.append(task)
+                position_to_id.append(tid)
+                raw_deps.append(list(spec.get("depends_on") or []))
+
+            # Second pass: resolve deps (index -> id, or pass through real ids).
+            created_ids = set(position_to_id)
+            for task, deps in zip(created, raw_deps):
+                resolved: list[str] = []
+                for d in deps:
+                    if isinstance(d, bool):
+                        continue
+                    if isinstance(d, int) and 0 <= d < len(position_to_id):
+                        resolved.append(position_to_id[d])
+                    elif isinstance(d, str) and d in created_ids:
+                        resolved.append(d)
+                    # anything else (dangling index/id) is dropped, not fatal
+                task.depends_on = resolved
+
             batch = [t.to_dict() for t in created]
         self._broadcast("tasks_planned", {"tasks": batch})
         return created
