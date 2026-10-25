@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-PROVIDERS = ("anthropic", "openai", "kimi", "custom", "mock")
+PROVIDERS = ("anthropic", "openai", "kimi", "custom", "cli", "mock")
 
 DEFAULT_MODELS = {
     "anthropic": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"),

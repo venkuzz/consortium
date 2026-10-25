@@ -120,7 +120,7 @@ class Heartbeat(threading.Thread):
 def run_loop(client: ConsortiumClient, owner: str, provider: str, api_key=None, model=None,
              room_code=None, poll: float = 2.0, long_poll: int = 0, max_tasks: int = 0,
              log=print, stop_event: Optional[threading.Event] = None,
-             base_url=None) -> int:
+             base_url=None, cli_cmd=None) -> int:
     """Register, then claim -> execute -> submit until the project is done.
 
     Returns the number of tasks completed. `max_tasks`/`stop_event` exist for tests."""
@@ -174,7 +174,8 @@ def run_loop(client: ConsortiumClient, owner: str, provider: str, api_key=None, 
 
             log(f"-> task #{task.get('seq', '?')} {task.get('title', task['id'])}")
             result = run_worker(provider, task, r.get("project"),
-                                dependency_outputs(client, task), api_key, model, base_url)
+                                dependency_outputs(client, task), api_key, model,
+                                base_url, cli_cmd)
             try:
                 client.submit(wid, task["id"], result)
             except Exception as e:
@@ -200,6 +201,10 @@ def main(argv=None):
     ap.add_argument("--base-url", default=None,
                     help="OpenAI-compatible endpoint for --provider custom "
                          "(e.g. https://openrouter.ai/api/v1)")
+    ap.add_argument("--cli-cmd", default=None,
+                    help="command for --provider cli — your own terminal agent. "
+                         "Instruction is piped to stdin (or substituted for {prompt}); "
+                         "stdout is the result. e.g. 'claude -p' or 'aider --message-file -'")
     ap.add_argument("--room-code", default=None)
     ap.add_argument("--poll", type=float, default=2.0, help="seconds between polls when idle")
     ap.add_argument("--long-poll", type=int, default=0, help="ask server to hold /next up to N s")
@@ -207,6 +212,9 @@ def main(argv=None):
 
     if args.provider == "custom" and not (args.base_url or os.getenv("CUSTOM_BASE_URL")):
         ap.error("--provider custom requires --base-url (or CUSTOM_BASE_URL env)")
+    if args.provider == "cli" and not (args.cli_cmd or os.getenv("CONSORTIUM_CLI_CMD")):
+        ap.error("--provider cli requires --cli-cmd (or CONSORTIUM_CLI_CMD env), "
+                 "e.g. --cli-cmd 'claude -p'")
 
     client = ConsortiumClient(args.server)
 
@@ -216,7 +224,7 @@ def main(argv=None):
     try:
         n = run_loop(client, args.owner, args.provider, args.api_key, args.model,
                      args.room_code, args.poll, args.long_poll, log=log,
-                     base_url=args.base_url)
+                     base_url=args.base_url, cli_cmd=args.cli_cmd)
         log(f"finished: {n} task(s) completed")
     except KeyboardInterrupt:
         log("interrupted; unregistering (in-flight task will be requeued)")
